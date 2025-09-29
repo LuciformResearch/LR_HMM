@@ -1,0 +1,9 @@
+regex:sk-REDACTED
+regex:sk-REDACTED
+
+regex:sk_live_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_LIVE_SK]
+regex:sk_test_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_TEST_SK]
+regex:pk_live_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_LIVE_PK]
+regex:pk_test_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_TEST_PK]
+regex:rk_live_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_LIVE_RK]
+regex:rk_test_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_TEST_RK]

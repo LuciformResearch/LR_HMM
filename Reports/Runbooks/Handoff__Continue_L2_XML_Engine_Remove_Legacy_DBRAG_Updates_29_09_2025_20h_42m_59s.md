@@ -84,4 +84,11 @@ Notes:
 - L1 haute concurrence validée (33) côté Vertex avec anti‑troncature; latences ~45–50s pour 141 blocs chez nous.
 - L2 engine primaire OK; reste à éliminer le retry legacy pour unifier complètement.
 
+### Option B2B (à planifier) — Filtrage de secrets au parsing
+- Ajouter un « secret scrubber » dans la chaîne de parsing (avant export des artefacts) pour neutraliser automatiquement patterns sensibles (API keys, tokens) dans les sources conversationnelles/documents.
+- Implémentation proposée:
+  - Liste de regex maintenues (OpenAI `sk-REDACTED Stripe `sk_live_`/`pk_live_`/`rk_live_`, etc.), remplacements par placeholders `[REDACTED_*]`.
+  - Mode « audit » (log des remplacements) + mode « strict » (blocage si secret actif détecté).
+  - Off par défaut en dev; on l’activera pour les runs pro/B2B ou ingestion de documents clients.
+
 *Rapport généré par new_report*

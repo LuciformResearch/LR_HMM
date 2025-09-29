@@ -8,6 +8,7 @@ dist/
 .env.*
 secrets/
 GoogleJSONKeys/
+ShadeOS_ExtractedData/
 
 # Logs and artefacts
 artefacts/logs/

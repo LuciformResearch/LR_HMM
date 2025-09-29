@@ -1,0 +1,9 @@
+regex:sk-proj-[A-Za-z0-9_\-]{30,}==>[REDACTED_OPENAI_PROJ_KEY]
+regex:sk-[A-Za-z0-9]{20,}==>[REDACTED_OPENAI_KEY]
+
+regex:sk_live_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_LIVE_SK]
+regex:sk_test_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_TEST_SK]
+regex:pk_live_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_LIVE_PK]
+regex:pk_test_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_TEST_PK]
+regex:rk_live_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_LIVE_RK]
+regex:rk_test_[A-Za-z0-9]{8,}==>[REDACTED_STRIPE_TEST_RK]

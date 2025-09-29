@@ -1,14 +1,17 @@
 # LR HMM Scripts
 
-Scripts pour le Hierarchical Memory Manager (HMM) avec RAG et Vertex AI.
+Projet expérimental en évolution rapide — API/flags et prompts peuvent changer. Beaucoup reste à faire (unification complète L1/L2, normalisations entités, intégration DB/RAG renforcée). Consultez les Runbooks dans `Reports/Runbooks` pour l’état le plus à jour.
 
 ## Prérequis
 
 ### Variables d'environnement
 ```bash
-export GOOGLE_APPLICATION_CREDENTIALS=/home/luciedefraiteur/GoogleJSONKeys/lr-hub-472010-17b9f2d37953.json
-export PROJECT_ID=lr-hub-472010
-export LOCATION=europe-west1
+# Recommandé: .env.local (ignoré par git)
+GOOGLE_APPLICATION_CREDENTIALS=secrets/lr-hub-472010-17b9f2d37953.json
+PROJECT_ID=lr-hub-472010
+GOOGLE_CLOUD_PROJECT=lr-hub-472010
+VERTEX_LOCATION=europe-west1
+LOCATION=europe-west1
 ```
 
 ### Base de données locale
@@ -23,29 +26,41 @@ docker compose -f docker-compose.db.yml up -d
 npx tsx scripts/check_vertexai_access.ts
 ```
 
-### Compression mémoire L1 (structuré)
+### Compression mémoire L1 (structuré, Vertex)
 ```bash
 npx tsx scripts/compress_memory.ts \
   --in artefacts/parsed/2025-06-25__orage_codé_textuel.json \
   --slug 2025-06-25__orage_codé_textuel \
   --window-chars 4000 \
-  --max-summary 400 \
+  --min-summary 250 --max-summary 400 --short-mode regenerate \
   --structured true \
-  --concurrency 4 \
-  --model gemini-2.5-flash \
-  --timeout-ms 60000
+  --vertexai true --model gemini-2.5-flash \
+  --concurrency 33 \
+  --timeout-ms 20000
+
+# Option: sortie structurée XML (summary + tags + entities)
+# (fusionne aussi les tags/artefacts algorithmiques)
+npx tsx scripts/compress_memory.ts \
+  ... \
+  --structured-xml true \
+  --allow-heuristic-fallback true
 ```
 
-### Compression mémoire L2 (Vertex AI)
+### Compression mémoire L2 (Vertex AI, XML Engine)
 ```bash
 npx tsx scripts/compress_memory_l2.ts \
   --slug 2025-06-25__orage_codé_textuel \
   --vertexai true --model gemini-2.5-flash \
-  --group-size 5 \
+  --group-size 5 --concurrency 6 \
+  --use-xml-engine true \
   --l2-multiplier 1.5 --l2-soft-target 1.0 --l2-wiggle 0.2 \
+  --overflow-mode regenerate --overflow-max-ratio 2.0 --soft-ratio-step 0.3 \
   --hard-min 300 \
-  --max-output-tokens 8192 --call-timeout-ms 40000 \
+  --max-output-tokens 8192 --call-timeout-ms 35000 \
   --log
+
+# Debug rapide:
+#   --test true --max-groups 3  (limiter les groupes)
 ```
 
 ### Embeddings vers DB
@@ -83,6 +98,16 @@ npx tsx scripts/context_compose.ts \
   --rerank true --min-score 0.3 --batch 8 \
   --mmr-lambda 0.3 --expand-neighborhood 1 --recent-turns 8 \
   --call-timeout-ms 10000 --db-timeout-ms 12000 --log
+```
+
+## Outils
+
+### Dual push (GitLab + GitHub)
+```bash
+./dual_push.sh --message "votre message" [--branch master]
+# Remotes:
+#   origin  -> git@gitlab.com:luciformresearch/lr_hmm.git
+#   github  -> https://github.com/LuciformResearch/LR_HMM.git
 ```
 
 ## Structure des données

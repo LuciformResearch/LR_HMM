@@ -1,0 +1,19 @@
+# Node
+node_modules/
+dist/
+.next/
+
+# Env and secrets
+.env
+.env.*
+secrets/
+GoogleJSONKeys/
+
+# Logs and artefacts
+artefacts/logs/
+*.log
+
+# OS/editor
+.DS_Store
+*.swp
+*.swo

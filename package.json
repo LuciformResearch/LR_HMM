@@ -1,0 +1,24 @@
+{
+  "name": "lr-hmm-scripts",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "lint": "eslint",
+    "clean": "rm -rf .next .next-vercel .vercel"
+  },
+  "dependencies": {
+    "@google/genai": "^0.3.1",
+    "@google/generative-ai": "^0.24.1",
+    "crypto-js": "^4.2.0",
+    "dotenv": "^17.2.2",
+    "google-auth-library": "^9.0.0",
+    "node-fetch": "^2.7.0",
+    "pg": "^8.11.3"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "@types/pg": "^8.11.0",
+    "tsx": "^4.20.5",
+    "typescript": "^5"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "query": "mémoire fractale lucie",
+  "distance": "cosine",
+  "minSimArg": "0.4",
+  "minScore": 0.3,
+  "topk": 8,
+  "topn": 40,
+  "vertexai": true,
+  "items": [],
+  "expanded": {
+    "totalMessages": 0,
+    "messages": []
+  }
+}

@@ -5,6 +5,7 @@ import { GoogleGenerativeAI } from '@google/generative-ai';
 import fetch from 'node-fetch';
 import { GoogleAuth } from 'google-auth-library';
 import { LuciformXMLParser } from '@/lib/xml-parser/index';
+import { generateStructuredXML } from '@/lib/summarization/xmlEngine';
 
 type Logger = { info: (msg: string) => void; close: () => Promise<void>; dir: string; file: string; base: string };
 
@@ -198,6 +199,7 @@ async function main() {
   const apiKey = process.env.GEMINI_API_KEY;
   const groupsConcurrency = Math.max(1, Number(getArg('--concurrency', '3')));
   const allowHeuristicFallback = (getArg('--allow-heuristic-fallback', 'false') || 'false').toLowerCase() === 'true';
+  const useXmlEngine = (getArg('--use-xml-engine', 'true') || 'true').toLowerCase() === 'true';
   // Overflow handling options
   const overflowMode = (getArg('--overflow-mode', 'accept') || 'accept').toLowerCase() as 'accept' | 'regenerate';
   const overflowMaxRatio = Number(getArg('--overflow-max-ratio', '2.0')); // accepter si len <= avgL1 * ratio
@@ -294,9 +296,17 @@ async function main() {
 
     // First attempt
     const genStart = Date.now();
-    let meta = await generateMetaSummaryXML(g, { useVertex, model, maxChars: gMax, minChars: gMin, callTimeoutMs, project, location, apiKey, fallbackModel, logger, maxOutputTokens, hintTarget: softTarget, hintCap: cap });
-    logger.info(`GenerateMetaSummaryXML duration=${Date.now() - genStart}ms strategy=${meta.strategy}`);
-    let xmlOut = meta.xml;
+    let xmlOut = '';
+    if (useXmlEngine) {
+      const docs = g.map((s, i) => `---\n[L1 #${i+1} | ${s.summaryChars} chars]\n${s.summary}`).join('\n');
+      const gen = await generateStructuredXML('l2', docs, { useVertex, project, location, model, maxOutputTokens, callTimeoutMs, minChars: gMin, maxChars: gMax, hintTarget: softTarget, hintCap: cap });
+      xmlOut = gen.xml;
+      logger.info(`XmlEngine (l2) duration=${Date.now() - genStart}ms strategy=${gen.strategy}`);
+    } else {
+      let meta = await generateMetaSummaryXML(g, { useVertex, model, maxChars: gMax, minChars: gMin, callTimeoutMs, project, location, apiKey, fallbackModel, logger, maxOutputTokens, hintTarget: softTarget, hintCap: cap });
+      logger.info(`GenerateMetaSummaryXML duration=${Date.now() - genStart}ms strategy=${meta.strategy}`);
+      xmlOut = meta.xml;
+    }
     if (!xmlOut || !xmlOut.includes('<l2')) {
       logger.info(`LLM XML missing or invalid. Strategy=${meta.strategy}.`);
       if (!allowHeuristicFallback) {

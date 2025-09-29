@@ -30,9 +30,18 @@ Commandes de référence (actuelles):
 
 1) L1 (Vertex, non‑XML, stable)
 ```
-export GOOGLE_APPLICATION_CREDENTIALS=...</n>
-export PROJECT_ID=lr-hub-472010; export GOOGLE_CLOUD_PROJECT=$PROJECT_ID
-export VERTEX_LOCATION=europe-west1; export LOCATION=$VERTEX_LOCATION
+# Option A: via .env.local (recommandé)
+# Créez .env.local (ignoré par git) avec:
+# GOOGLE_APPLICATION_CREDENTIALS=secrets/lr-hub-472010-17b9f2d37953.json
+# PROJECT_ID=lr-hub-472010
+# GOOGLE_CLOUD_PROJECT=lr-hub-472010
+# VERTEX_LOCATION=europe-west1
+# LOCATION=europe-west1
+
+# Option B: export direct dans le shell
+# export GOOGLE_APPLICATION_CREDENTIALS=secrets/lr-hub-472010-17b9f2d37953.json
+# export PROJECT_ID=lr-hub-472010; export GOOGLE_CLOUD_PROJECT=$PROJECT_ID
+# export VERTEX_LOCATION=europe-west1; export LOCATION=$VERTEX_LOCATION
 
 npx tsx scripts/compress_memory.ts \
   --in artefacts/parsed/2025-06-25__orage_codé_textuel.json \

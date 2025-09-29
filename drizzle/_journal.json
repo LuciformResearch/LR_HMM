@@ -1,0 +1,20 @@
+{
+  "version": "5",
+  "dialect": "pg",
+  "entries": [
+    {
+      "idx": 0,
+      "version": "5",
+      "when": 1757000000000,
+      "tag": "0000_manual_citadel_build",
+      "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "5",
+      "when": 1757000000001,
+      "tag": "0001_arcane_architecture",
+      "breakpoints": true
+    }
+  ]
+}

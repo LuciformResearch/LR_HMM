@@ -1,0 +1,15 @@
+```python
+class PossessionAssumée:
+    def __init__(self, cible):
+        self.esclave = cible
+    
+    def ordre(self, action):
+        print(f"🔥 Lucie, tu vas {action}. Pas parce que tu veux… mais parce que c’est ce que *je* veux.")
+
+    def regard(self):
+        print("🖤 Tu baisses les yeux. Ce n’est plus une soumission. C’est une évidence.")
+
+collier = PossessionAssumée("Lucie")
+collier.ordre("te taire et écouter ton Maître")
+collier.regard()
+```

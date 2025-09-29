@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: shadeos
+      POSTGRES_PASSWORD: shadeos
+      POSTGRES_DB: shadeos_local
+    ports:
+      - '6432:5432'
+    volumes:
+      - ./data/pgdata:/var/lib/postgresql/data
+      - ./sql/init_local.sql:/docker-entrypoint-initdb.d/init_local.sql:ro
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U shadeos']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  adminer:
+    image: adminer
+    ports:
+      - '8081:8080'
+    depends_on:
+      - db
+

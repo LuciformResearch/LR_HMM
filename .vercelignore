@@ -1,0 +1,65 @@
+# Fichiers de développement
+.env
+.env.local
+.env.test
+
+# Docker
+docker-compose*.yml
+Dockerfile*
+
+# Scripts de développement
+scripts/dev-*.sh
+scripts/test-*.sh
+scripts/setup-*.sh
+
+# Logs et cache
+logs/
+local_cache/
+memory-artefacts/
+memory-persistence-data/
+debug_convs_output/
+ci-reports/
+Reports/
+artefacts/
+backup/
+
+# Fichiers de test et debug
+debug-*.ts
+debug-*.js
+test-*.ts
+check-*.ts
+check-*.js
+analyze-*.ts
+cleanup-*.ts
+generate-*.ts
+migrate-*.ts
+fix-*.ts
+benchmark-*.ts
+*-backup.tsx
+*-backup.ts
+
+# Pages problématiques pour le build
+src/app/terminal-algareth/page.tsx
+src/app/terminal-web/page.tsx
+src/app/terminal/page.tsx
+
+# Documentation de développement
+legacy-tests/
+github-analysis-reports/
+convs-cursor-backup-*/
+bytebot-main/
+test-projects/
+secret-ops/
+test-generated-images/
+
+# Fichiers temporaires
+*.log
+*.tmp
+*.temp
+
+# Node modules (sera installé par Vercel)
+node_modules/
+**/node_modules/
+
+# Fichiers de configuration locale
+filebrowser-config.json

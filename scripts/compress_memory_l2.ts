@@ -6,22 +6,13 @@ import fetch from 'node-fetch';
 import { GoogleAuth } from 'google-auth-library';
 import { LuciformXMLParser } from '@/lib/xml-parser/index';
 import { generateStructuredXML } from '@/lib/summarization/xmlEngine';
+import { createLogger, Logger } from '@/lib/hmm/logger';
+import { runPool } from '@/lib/hmm/runPool';
+import { computeL2Bounds } from '@/lib/hmm/bounds';
+import { evaluateOverflow } from '@/lib/hmm/policies';
+import { HierarchicalMemoryCompressor } from '@/lib/hmm/compressor';
 
-type Logger = { info: (msg: string) => void; close: () => Promise<void>; dir: string; file: string; base: string };
-
-async function createLogger(prefix: string, logPathArg?: string): Promise<Logger> {
-  const fsDyn = await import('fs');
-  const pathDyn = await import('path');
-  const dir = logPathArg && !logPathArg.endsWith('.log') ? logPathArg : pathDyn.resolve(process.cwd(), 'artefacts/logs');
-  await fsDyn.promises.mkdir(dir, { recursive: true });
-  const runId = Date.now();
-  const file = logPathArg && logPathArg.endsWith('.log') ? logPathArg : pathDyn.join(dir, `${prefix}_${runId}.log`);
-  const stream = fsDyn.createWriteStream(file, { flags: 'a' });
-  const write = (msg: string) => { const line = `[${new Date().toISOString()}] ${msg}`; console.log(line); stream.write(line + '\n'); };
-  write(`Log ouvert: ${file}`);
-  const base = file.replace(/\.log$/, '');
-  return { info: write, close: async () => new Promise(res => stream.end(res)), dir, file, base };
-}
+// Logger provided by lib/hmm/logger
 
 type L1Summary = {
   level: number;
@@ -255,27 +246,7 @@ async function main() {
     return { summary, tags, persons, artifacts, places, times, signalsRaw, omissions, extrasText };
   };
 
-  // Simple pool runner copied from L1 script
-  async function runPool<T, R>(items: T[], worker: (it: T, i: number) => Promise<R>, limit = 3): Promise<R[]> {
-    const results: R[] = new Array(items.length) as any;
-    let next = 0;
-    const running: Promise<void>[] = [];
-    async function runOne(i: number) {
-      const r = await worker(items[i], i); (results as any)[i] = r;
-    }
-    while (next < items.length || running.length > 0) {
-      while (next < items.length && running.length < limit) {
-        const i = next++;
-        const p = runOne(i).then(() => {
-          const idx = running.indexOf(p as any);
-          if (idx >= 0) running.splice(idx, 1);
-        });
-        running.push(p as any);
-      }
-      if (running.length > 0) await Promise.race(running);
-    }
-    return results;
-  }
+  // Pool runner now imported from lib/hmm/runPool
 
   logger.info(`Starting L2: groups=${groups.length} groupSize=${groupSize} concurrency=${groupsConcurrency} vertex=${useVertex} model=${model} timeoutMs=${callTimeoutMs}`);
 
@@ -285,30 +256,29 @@ async function main() {
     const sumChars = g.reduce((a, x) => a + (x.summaryChars || 0), 0);
     const avgChars = Math.max(1, Math.floor(sumChars / Math.max(1, g.length)));
 
-    // Compute dynamic bounds
-    const wiggle = Math.max(0, Math.min(0.4, l2Wiggle));
-    const target = Math.max(100, Math.floor(avgChars * l2Multiplier));
-    const cap = Math.floor(avgChars * 2.0);
-    const softTarget = Math.max(50, Math.floor(avgChars * l2SoftTarget));
-    const gMin = Math.max(hardMin, 0);
-    const gMax = Math.max(gMin + 50, Math.min(cap, Math.floor(target * (1 + wiggle))));
+    // Compute dynamic bounds (lib)
+    const bounds = computeL2Bounds(avgChars, { multiplier: l2Multiplier, wiggle: l2Wiggle, hardMin, capRatio: 2.0, softTargetRatio: l2SoftTarget });
+    const { min: gMin, max: gMax, target, cap, softTarget } = bounds;
     logger.info(`L2 bounds: size=${g.length} avgL1=${avgChars} target=${target} cap=${cap} bounds=[${gMin},${gMax}] softTarget=${softTarget}`);
 
     // First attempt
     const genStart = Date.now();
     let xmlOut = '';
+    let genStrategyLabel = '';
     if (useXmlEngine) {
       const docs = g.map((s, i) => `---\n[L1 #${i+1} | ${s.summaryChars} chars]\n${s.summary}`).join('\n');
       const gen = await generateStructuredXML('l2', docs, { useVertex, project, location, model, maxOutputTokens, callTimeoutMs, minChars: gMin, maxChars: gMax, hintTarget: softTarget, hintCap: cap });
       xmlOut = gen.xml;
-      logger.info(`XmlEngine (l2) duration=${Date.now() - genStart}ms strategy=${gen.strategy}`);
+      genStrategyLabel = `XmlEngine (l2) strategy=${gen.strategy}`;
+      logger.info(`${genStrategyLabel} duration=${Date.now() - genStart}ms`);
     } else {
       let meta = await generateMetaSummaryXML(g, { useVertex, model, maxChars: gMax, minChars: gMin, callTimeoutMs, project, location, apiKey, fallbackModel, logger, maxOutputTokens, hintTarget: softTarget, hintCap: cap });
+      genStrategyLabel = `GenerateMetaSummaryXML strategy=${meta.strategy}`;
       logger.info(`GenerateMetaSummaryXML duration=${Date.now() - genStart}ms strategy=${meta.strategy}`);
       xmlOut = meta.xml;
     }
     if (!xmlOut || !xmlOut.includes('<l2')) {
-      logger.info(`LLM XML missing or invalid. Strategy=${meta.strategy}.`);
+      logger.info(`LLM XML missing or invalid. ${genStrategyLabel || 'unknown-strategy'}.`);
       if (!allowHeuristicFallback) {
         throw new Error(`L2 XML generation failed (no <l2> root). Heuristic fallback disabled.`);
       }
@@ -331,38 +301,60 @@ async function main() {
       throw new Error(msg);
     }
     if (len > gMax) {
-      const msg = `L2 overflow: len=${len} > max=${gMax} (avgL1=${avgChars} ratio=${ratioToAvg.toFixed(2)})`;
-      if (overflowMode === 'accept' && ratioToAvg <= overflowMaxRatio) {
-        logger.info(`⚠️ WARNING: ${msg} — ACCEPT (mode=accept, maxRatio=${overflowMaxRatio})`);
-      } else if (overflowMode === 'regenerate') {
-        const newSoft = Math.max(0.3, Number((l2SoftTarget - softRatioStep).toFixed(2)));
-        logger.info(`⚠️ WARNING: ${msg} — REGENERATE with lower soft-target: ${l2SoftTarget} -> ${newSoft}`);
+      const evalRes = evaluateOverflow(len, avgChars, gMax, overflowMode as any, overflowMaxRatio, l2SoftTarget, softRatioStep);
+      logger.info(`⚠️ ${evalRes.message}`);
+      if (evalRes.decision === 'regenerate') {
+        const newSoft = evalRes.newSoftTargetRatio || l2SoftTarget;
         const gen2Start = Date.now();
-        const meta2 = await generateMetaSummaryXML(g, { useVertex, model, maxChars: gMax, minChars: gMin, callTimeoutMs, project, location, apiKey, fallbackModel, logger, maxOutputTokens, hintTarget: Math.max(50, Math.floor(avgChars * newSoft)), hintCap: cap });
-        logger.info(`Retry GenerateMetaSummaryXML duration=${Date.now() - gen2Start}ms strategy=${meta2.strategy}`);
-        if (meta2.xml && meta2.xml.includes('<l2')) {
-          const e2 = extractFromXml(meta2.xml);
-          const len2 = e2.summary.length;
-          const ratio2 = len2 / Math.max(1, avgChars);
-          if (len2 <= gMax && len2 >= gMin) {
-            logger.info(`✅ Retry success: len=${len2} within [${gMin},${gMax}] (ratio=${ratio2.toFixed(2)})`);
-            summary = e2.summary; tags = e2.tags; persons = e2.persons; artifacts = e2.artifacts; places = e2.places; times = e2.times; signalsRaw = e2.signalsRaw; omissions = e2.omissions; extrasText = e2.extrasText;
-          } else if (ratio2 <= overflowMaxRatio) {
-            logger.info(`⚠️ Retry still overflow (len=${len2}), ACCEPT due to ratio<=${overflowMaxRatio}`);
-            summary = e2.summary; tags = e2.tags; persons = e2.persons; artifacts = e2.artifacts; places = e2.places; times = e2.times; signalsRaw = e2.signalsRaw; omissions = e2.omissions; extrasText = e2.extrasText;
+        if (useXmlEngine) {
+          const docs2 = g.map((s, i) => `---\n[L1 #${i+1} | ${s.summaryChars} chars]\n${s.summary}`).join('\n');
+          const hint2 = Math.max(50, Math.floor(avgChars * newSoft));
+          const gen2 = await generateStructuredXML('l2', docs2, { useVertex, project, location, model, maxOutputTokens, callTimeoutMs, minChars: gMin, maxChars: gMax, hintTarget: hint2, hintCap: cap });
+          logger.info(`XmlEngine (l2) RETRY duration=${Date.now() - gen2Start}ms strategy=${gen2.strategy} hintTarget=${hint2}`);
+          if (gen2.xml && gen2.xml.includes('<l2')) {
+            const e2 = extractFromXml(gen2.xml);
+            const len2 = e2.summary.length;
+            const ratio2 = len2 / Math.max(1, avgChars);
+            if (len2 <= gMax && len2 >= gMin) {
+              logger.info(`✅ Retry success: len=${len2} within [${gMin},${gMax}] (ratio=${ratio2.toFixed(2)})`);
+              summary = e2.summary; tags = e2.tags; persons = e2.persons; artifacts = e2.artifacts; places = e2.places; times = e2.times; signalsRaw = e2.signalsRaw; omissions = e2.omissions; extrasText = e2.extrasText;
+            } else if (ratio2 <= overflowMaxRatio) {
+              logger.info(`⚠️ Retry still overflow (len=${len2}), ACCEPT due to ratio<=${overflowMaxRatio}`);
+              summary = e2.summary; tags = e2.tags; persons = e2.persons; artifacts = e2.artifacts; places = e2.places; times = e2.times; signalsRaw = e2.signalsRaw; omissions = e2.omissions; extrasText = e2.extrasText;
+            } else {
+              logger.info(`❌ Retry failed: len=${len2} ratio=${ratio2.toFixed(2)} > maxRatio=${overflowMaxRatio}`);
+              throw new Error(`L2 overflow after retry (len=${len2} > ${gMax}, ratio=${ratio2.toFixed(2)})`);
+            }
           } else {
-            logger.info(`❌ Retry failed: len=${len2} ratio=${ratio2.toFixed(2)} > maxRatio=${overflowMaxRatio}`);
-            throw new Error(`L2 overflow after retry (len=${len2} > ${gMax}, ratio=${ratio2.toFixed(2)})`);
+            logger.info(`❌ Retry generation failed (no <l2>) with XmlEngine`);
+            throw new Error('L2 XML retry generation failed');
           }
         } else {
-          logger.info(`❌ Retry generation failed (no <l2>), cannot recover`);
-          throw new Error('L2 XML retry generation failed');
+          const meta2 = await generateMetaSummaryXML(g, { useVertex, model, maxChars: gMax, minChars: gMin, callTimeoutMs, project, location, apiKey, fallbackModel, logger, maxOutputTokens, hintTarget: Math.max(50, Math.floor(avgChars * newSoft)), hintCap: cap });
+          logger.info(`Retry GenerateMetaSummaryXML duration=${Date.now() - gen2Start}ms strategy=${meta2.strategy}`);
+          if (meta2.xml && meta2.xml.includes('<l2')) {
+            const e2 = extractFromXml(meta2.xml);
+            const len2 = e2.summary.length;
+            const ratio2 = len2 / Math.max(1, avgChars);
+            if (len2 <= gMax && len2 >= gMin) {
+              logger.info(`✅ Retry success: len=${len2} within [${gMin},${gMax}] (ratio=${ratio2.toFixed(2)})`);
+              summary = e2.summary; tags = e2.tags; persons = e2.persons; artifacts = e2.artifacts; places = e2.places; times = e2.times; signalsRaw = e2.signalsRaw; omissions = e2.omissions; extrasText = e2.extrasText;
+            } else if (ratio2 <= overflowMaxRatio) {
+              logger.info(`⚠️ Retry still overflow (len=${len2}), ACCEPT due to ratio<=${overflowMaxRatio}`);
+              summary = e2.summary; tags = e2.tags; persons = e2.persons; artifacts = e2.artifacts; places = e2.places; times = e2.times; signalsRaw = e2.signalsRaw; omissions = e2.omissions; extrasText = e2.extrasText;
+            } else {
+              logger.info(`❌ Retry failed: len=${len2} ratio=${ratio2.toFixed(2)} > maxRatio=${overflowMaxRatio}`);
+              throw new Error(`L2 overflow after retry (len=${len2} > ${gMax}, ratio=${ratio2.toFixed(2)})`);
+            }
+          } else {
+            logger.info(`❌ Retry generation failed (no <l2>), cannot recover`);
+            throw new Error('L2 XML retry generation failed');
+          }
         }
-      } else if (ratioToAvg <= overflowMaxRatio) {
-        logger.info(`⚠️ WARNING: ${msg} — ACCEPT due to ratio<=${overflowMaxRatio}`);
+      } else if (evalRes.decision === 'accept') {
+        // accept as-is
       } else {
-        logger.info(`❌ ERROR: ${msg} — REJECT`);
-        throw new Error(msg);
+        throw new Error(evalRes.message);
       }
     }
 
@@ -385,8 +377,16 @@ async function main() {
     return result;
   }
 
-  const results = await runPool(groups, processGroup, groupsConcurrency);
-  for (const r of results) l2Summaries.push(r);
+  // Use shared compressor for L2 summarization
+  const compressor = new HierarchicalMemoryCompressor();
+  const engine = {
+    useVertex, project, location, model, callTimeoutMs, maxOutputTokens,
+    l2Multiplier, l2Wiggle, hardMin, l2SoftTarget,
+    overflowMode, overflowMaxRatio, softRatioStep,
+    allowHeuristicFallback,
+  } as const;
+  const results = await compressor.summarizeL2Groups(groups as any, engine as any, groupsConcurrency, logger);
+  for (const r of results) l2Summaries.push(r as any);
 
   const out = { slug, produced: l2Summaries.length, summaries: l2Summaries };
   const outPath = path.join(outDir, `${slug}.l2.json`);

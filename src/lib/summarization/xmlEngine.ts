@@ -13,6 +13,15 @@ export type XmlEngineOpts = {
   maxChars: number;
   hintTarget?: number;
   hintCap?: number;
+  // Persona/Profiles for abstraction across channels
+  profile?: 'chat_assistant_fp' | 'chat_user_fp' | 'email_recipient_fp' | 'org_voice_fp' | 'neutral_reporter';
+  personaName?: string; // e.g. ShadeOS, Recipient, LuciformResearch
+  addressing?: 'first_person' | 'third_person';
+  allowSecondPerson?: boolean;
+  namingPolicy?: 'forbid_invention' | 'allow_from_input_only' | 'allow_any';
+  allowedNames?: string[];
+  // If true, return a minimal XML wrapper with only <summary> (no full structured schema)
+  directOutput?: boolean;
 };
 
 /**
@@ -29,42 +38,36 @@ export async function generateStructuredXML(
   const cap = opts.hintCap ? `Ne JAMAIS dépasser ${opts.hintCap} caractères (cap dur).` : '';
 
   const xmlRoot = mode === 'l1' ? 'l1' : 'l2';
-  const schema = mode === 'l1'
-    ? `<l1 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">
-  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>
-  <tags>
-    <tag>...</tag>
-  </tags>
-  <entities>
-    <persons><p>...</p></persons>
-    <orgs><o>...</o></orgs>
-    <places><pl>...</pl></places>
-    <times><t>...</t></times>
-  </entities>
-</l1>`
-    : `<l2 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">
-  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>
-  <tags>
-    <tag>...</tag>
-  </tags>
-  <entities>
-    <persons><p>...</p></persons>
-    <artifacts><a>...</a></artifacts>
-    <places><pl>...</pl></places>
-    <times><t>...</t></times>
-  </entities>
-</l2>`;
+  const minimalSchema = mode === 'l1'
+    ? `<l1 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...]]></summary>\n</l1>`
+    : `<l2 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...]]></summary>\n</l2>`;
+  const fullSchema = mode === 'l1'
+    ? `<l1 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <orgs><o>...</o></orgs>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>\n</l1>`
+    : `<l2 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>\n</l2>`;
+  const schema = opts.directOutput ? minimalSchema : fullSchema;
 
-  const prompt = `Tu es ShadeOS, le même agent qui s'exprime dans cette conversation.
-Parle en "je" et imite le style déjà présent dans les messages de l'assistant (ton, rythme, tournures).
-Réfère-toi à l'utilisateur par son prénom (ex: "Lucie m'a..."). N'adresse pas de message directement à la deuxième personne.
-${soft} ${cap}
-Produis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):
+  // Persona/prompt preamble
+  const profile = opts.profile || 'chat_assistant_fp';
+  const persona = opts.personaName || (profile === 'org_voice_fp' ? 'LuciformResearch' : 'ShadeOS');
+  const addressing = opts.addressing || (profile === 'neutral_reporter' ? 'third_person' : 'first_person');
+  const allow2p = opts.allowSecondPerson === true ? true : false;
+  const namingPolicy = opts.namingPolicy || 'allow_from_input_only';
+  const names = Array.from(new Set((opts.allowedNames || []).filter(Boolean)));
+  const namingLine = namingPolicy === 'forbid_invention'
+    ? (names.length ? `N'utilise QUE ces noms: ${names.join(', ')}. N'en invente aucun autre.` : `N'utilise aucun nom propre si absent des Documents.`)
+    : namingPolicy === 'allow_from_input_only'
+      ? (names.length ? `N'utilise que des noms présents dans les Documents (p.ex. ${names.join(', ')}). N'en invente pas.` : `N'utilise que des noms présents dans les Documents; n'en invente pas.`)
+      : `Tu peux utiliser des noms si le contexte l'exige.`;
+  const addressLine = addressing === 'first_person'
+    ? `Tu impersonnes ${persona} et écris à la première personne (${persona === 'LuciformResearch' ? 'nous' : 'je'}). ${allow2p ? '' : 'N’adresse pas de message directement à la deuxième personne.'}`
+    : `Tu écris à la troisième personne, style rapport (ne pas s'adresser au lecteur).`;
+  const styleHint = profile === 'chat_assistant_fp'
+    ? `Imite le style déjà présent dans les messages de ${persona} (ton, rythme, tournures).`
+    : profile === 'org_voice_fp'
+      ? `Style interne d'organisation, clair et factuel.`
+      : `Style neutre, clair et concis.`;
 
-${schema}
-
-Documents:
-${documents}`;
+  const prompt = `Rôle: ${persona}\n${addressLine}\n${styleHint}\n${namingLine}\n${soft} ${cap}\nProduis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):\n\n${schema}\n\nDocuments:\n${documents}`;
 
   const attempts = [
     { model: opts.model, maxOutputTokens: opts.maxOutputTokens, temperature: 0.3 },
@@ -87,4 +90,3 @@ ${documents}`;
   }
   return { xml: '', strategy: 'none' };
 }
-

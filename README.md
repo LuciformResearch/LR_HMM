@@ -26,25 +26,57 @@ docker compose -f docker-compose.db.yml up -d
 npx tsx scripts/check_vertexai_access.ts
 ```
 
-### Compression mémoire L1 (structuré, Vertex)
+### Compression mémoire L1 (Vertex + XML Engine)
+Exemple “batch complet” (profil chat assistant, persona ShadeOS), en sortie structurée XML (summary + tags + entities):
 ```bash
 npx tsx scripts/compress_memory.ts \
-  --in artefacts/parsed/2025-06-25__orage_codé_textuel.json \
   --slug 2025-06-25__orage_codé_textuel \
+  --vertexai true --model gemini-2.5-flash \
+  --structured true --structured-xml true \
+  --profile chat_assistant_fp --persona-name ShadeOS \
+  --role-map "assistant=ShadeOS,user=Lucie" \
   --window-chars 4000 \
   --min-summary 250 --max-summary 400 --short-mode regenerate \
-  --structured true \
-  --vertexai true --model gemini-2.5-flash \
   --concurrency 33 \
-  --timeout-ms 20000
-
-# Option: sortie structurée XML (summary + tags + entities)
-# (fusionne aussi les tags/artefacts algorithmiques)
-npx tsx scripts/compress_memory.ts \
-  ... \
-  --structured-xml true \
+  --max-output-tokens 1024 \
   --allow-heuristic-fallback true
 ```
+
+Variante “non structurée” mais toujours via l’XML Engine (prompt unifié):
+```bash
+npx tsx scripts/compress_memory.ts \
+  --slug 2025-06-25__orage_codé_textuel \
+  --vertexai true --model gemini-2.5-flash \
+  --structured true --structured-xml false \
+  --profile chat_assistant_fp --persona-name ShadeOS \
+  --role-map "assistant=ShadeOS,user=Lucie" \
+  --window-chars 4000 \
+  --min-summary 250 --max-summary 400 --short-mode regenerate \
+  --concurrency 33 \
+  --max-output-tokens 1024 \
+  --allow-heuristic-fallback true
+```
+
+Régénération partielle de quelques index (réutilise le JSON existant et remplace uniquement les blocs ciblés):
+```bash
+# Exemple: régénérer les indices 34, 39, et la plage 43–49
+npx tsx scripts/compress_memory.ts \
+  --slug 2025-06-25__orage_codé_textuel \
+  --vertexai true --model gemini-2.5-flash \
+  --structured true --structured-xml true \
+  --profile chat_assistant_fp --persona-name ShadeOS \
+  --role-map "assistant=ShadeOS,user=Lucie" \
+  --window-chars 4000 \
+  --min-summary 250 --max-summary 400 --short-mode regenerate \
+  --concurrency 6 \
+  --max-output-tokens 1024 \
+  --allow-heuristic-fallback true \
+  --only-indices "34,39,43-49"
+```
+
+Notes:
+- Chaque entrée L1 contient un champ `index` qui correspond à sa position dans `summaries[]` (utile pour la régénération ciblée).
+- Le remap des rôles vers `ShadeOS:`/`Lucie:` est contrôlé par `--role-map` et peut être adapté à d’autres canaux (emails, org voice, etc.) via `--profile`/`--persona-name`.
 
 ### Compression mémoire L2 (Vertex AI, XML Engine)
 ```bash
@@ -121,3 +153,14 @@ npx tsx scripts/context_compose.ts \
 ## Documentation
 
 Voir `Reports/Runbooks/` pour la documentation détaillée des processus HMM.
+
+## Licence
+
+Ce projet est distribué sous une variante MIT avec clause d'attribution renforcée, identique à celle utilisée dans LR Hub™.
+
+- Fichier: `LICENSE`
+- Attribution requise: "Basé sur LR Hub™ par Lucie Defraiteur"
+- Projet d'origine: https://gitlab.com/luciformresearch/lr_chat
+
+En résumé: vous pouvez utiliser, modifier et distribuer, y compris commercialement, à condition de conserver la mention de copyright et
+d’ajouter une attribution claire au projet d’origine. Voir le fichier `LICENSE` pour les termes complets.

@@ -19,6 +19,8 @@ export type L1Summary = {
   durationMs: number;
   tags?: string[];
   entities?: any;
+  signals?: any;
+  extras?: any;
 };
 
 export type L2Summary = {
@@ -35,4 +37,3 @@ export type L2Summary = {
   signals?: any;
   extras?: any;
 };
-

@@ -22,6 +22,11 @@ export type XmlEngineOpts = {
   allowedNames?: string[];
   // If true, return a minimal XML wrapper with only <summary> (no full structured schema)
   directOutput?: boolean;
+  // Pacing + retry controls
+  paceDelayMs?: number;          // optional delay before each call (rate pacing)
+  retryAttempts?: number;        // attempts on 429/timeout (default 2)
+  retryBaseMs?: number;          // base backoff (default 500ms)
+  retryJitterMs?: number;        // added random jitter (default 250ms)
 };
 
 /**
@@ -47,8 +52,8 @@ export async function generateStructuredXML(
     ? `<l1 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...]]></summary>\n</l1>`
     : `<l2 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...]]></summary>\n</l2>`;
   const fullSchema = mode === 'l1'
-    ? `<l1 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <orgs><o>...</o></orgs>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>\n</l1>`
-    : `<l2 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>\n</l2>`;
+    ? `<l1 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <orgs><o>...</o></orgs>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>\n  <signals><![CDATA[{\\"themes\\":[...],\\"timeline\\":[{\\"t\\":\\"00:12\\",\\"event\\":\\"...\\"}]}]]></signals>\n  <extras>\n    <omission>...</omission>\n  </extras>\n</l1>`
+    : `<l2 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>\n  <signals><![CDATA[{\\"themes\\":[...],\\"timeline\\":[{\\"t\\":\\"00:12\\",\\"event\\":\\"...\\"}]}]]></signals>\n  <extras>\n    <omission>...</omission>\n  </extras>\n</l2>`;
   const schema = opts.directOutput ? minimalSchema : fullSchema;
 
   // Persona/prompt preamble
@@ -77,13 +82,15 @@ export async function generateStructuredXML(
     : '';
   const prompt = `Rôle: ${persona}\n${addressLine}\n${styleHint}\n${namingLine}\n${soft} ${cap}\n${narrativeHint}\nProduis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):\n\n${schema}\n\nDocuments:\n${documents}`;
 
-  const attempts = [
-    { model: opts.model, maxOutputTokens: opts.maxOutputTokens, temperature: 0.3 },
-    { model: opts.model, maxOutputTokens: Math.max(opts.maxOutputTokens, 1024), temperature: 0.2 }
-  ];
+  const retryAttempts = Math.max(1, opts.retryAttempts ?? 2);
+  const baseMs = Math.max(0, opts.retryBaseMs ?? 500);
+  const jitterMs = Math.max(0, opts.retryJitterMs ?? 250);
 
-  for (let i = 0; i < attempts.length; i++) {
-    const a = attempts[i];
+  for (let i = 0; i < retryAttempts; i++) {
+    const a = { model: opts.model, maxOutputTokens: i === 0 ? opts.maxOutputTokens : Math.max(opts.maxOutputTokens, 1024), temperature: i === 0 ? 0.3 : 0.2 };
+    if ((opts.paceDelayMs ?? 0) > 0) {
+      await new Promise(r => setTimeout(r, opts.paceDelayMs as number));
+    }
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.callTimeoutMs);
     try {
@@ -95,6 +102,11 @@ export async function generateStructuredXML(
       const out = (resp?.text || resp?.response?.text || '').trim();
       if (out.includes(`<${xmlRoot}`)) return { xml: out, strategy: i === 0 ? 'primary' : 'retry' };
     } finally { clearTimeout(t); }
+    // backoff before next attempt
+    if (i + 1 < retryAttempts) {
+      const wait = baseMs * Math.pow(2, i) + Math.floor(Math.random() * (jitterMs + 1));
+      await new Promise(r => setTimeout(r, wait));
+    }
   }
   return { xml: '', strategy: 'none' };
 }

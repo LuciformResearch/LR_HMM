@@ -43,6 +43,11 @@ async function main() {
   const shortMode = (getArg('--short-mode', 'regenerate') || 'regenerate').toLowerCase() as 'accept' | 'regenerate' | 'error';
   const maxOutputTokens = Number(getArg('--max-output-tokens', '512'));
   const allowHeuristicFallback = (getArg('--allow-heuristic-fallback', 'true') || 'true').toLowerCase() === 'true';
+  // xmlEngine pacing/backoff
+  const enginePaceMs = Number(getArg('--engine-pace-ms', '0')); // e.g., 3000
+  const engineRetryAttempts = Number(getArg('--engine-retry-attempts', '2'));
+  const engineRetryBaseMs = Number(getArg('--engine-retry-base-ms', '500'));
+  const engineRetryJitterMs = Number(getArg('--engine-retry-jitter-ms', '250'));
   const onlyIndicesArg = getArg('--only-indices');
   const onlyIndices: number[] | undefined = onlyIndicesArg ? (() => {
     const out: number[] = [];
@@ -85,6 +90,10 @@ async function main() {
     structuredXml, allowHeuristicFallback,
     profile, personaName, interlocutor, roleMap,
     shortMode,
+    paceDelayMs: enginePaceMs,
+    retryAttempts: engineRetryAttempts,
+    retryBaseMs: engineRetryBaseMs,
+    retryJitterMs: engineRetryJitterMs,
   } as any;
 
   const summaries: any[] = new Array(blocks.length);

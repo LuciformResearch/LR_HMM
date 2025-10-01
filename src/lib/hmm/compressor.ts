@@ -2,6 +2,7 @@ import { GoogleGenAI } from '@google/genai';
 import { LuciformXMLParser } from '@luciformresearch/xmlparser';
 import { generateStructuredXML } from '@/lib/summarization/xmlEngine';
 import { runPool } from '@/lib/hmm/runPool';
+import { collectText, getText, parseTags, parseEntities, parseExtras } from '@/lib/hmm/xmlHelpers';
 import { evaluateUnderflow } from '@/lib/hmm/policies';
 import { buildChatDoc } from '@/lib/hmm/adapters/chatAdapter';
 import { ParsedItem, L1Summary, L2Summary } from '@/lib/hmm/types';
@@ -105,6 +106,10 @@ export class HierarchicalMemoryCompressor {
           allowSecondPerson: false,
           namingPolicy: 'allow_from_input_only',
           allowedNames,
+          paceDelayMs: engine.paceDelayMs,
+          retryAttempts: engine.retryAttempts,
+          retryBaseMs: engine.retryBaseMs,
+          retryJitterMs: engine.retryJitterMs,
         });
         let xml = xmlRes.xml;
         if (!xml || !xml.includes('<l1')) {
@@ -118,13 +123,7 @@ export class HierarchicalMemoryCompressor {
         const parsed = parser.parse();
         const root: any = parsed.document?.root;
         if (!root || root.name !== 'l1') throw new Error('L1 XML parse failed');
-        const collectText = (node: any): string => {
-          if (!node) return '';
-          if (node.type === 'text' || node.type === 'cdata') return node.content || '';
-          return (node.children || []).map(collectText).join('');
-        };
-        const getText = (name: string) => { const el = root.findElement(name); return el ? collectText(el).trim() : ''; };
-        const summaryTextXml = getText('summary');
+        const summaryTextXml = getText(root, 'summary');
 
         let summaryText = summaryTextXml || '';
         const under = evaluateUnderflow(summaryText.length, engine.minSummary, engine.shortMode);
@@ -133,6 +132,7 @@ export class HierarchicalMemoryCompressor {
             useVertex: engine.useVertex, project: engine.project, location: engine.location, model: engine.model,
             maxOutputTokens: Math.max(engine.maxOutputTokens, 1024), callTimeoutMs: engine.callTimeoutMs,
             minChars: Math.max(engine.minSummary, 100), maxChars: limit, profile: engine.profile, personaName: engine.personaName,
+            paceDelayMs: engine.paceDelayMs, retryAttempts: engine.retryAttempts, retryBaseMs: engine.retryBaseMs, retryJitterMs: engine.retryJitterMs,
           });
           const xml2 = xmlRes2.xml || '';
           if (xml2.includes('<l1')) {
@@ -146,14 +146,11 @@ export class HierarchicalMemoryCompressor {
           throw new Error(under.message);
         }
 
-        // collect tags/entities
-        const tagsEl: any = root.findElement('tags');
-        const xmlTags: string[] = (tagsEl?.findAllElements('tag') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean).slice(0, 12);
-        const entsEl: any = root.findElement('entities');
-        const persons = (entsEl?.findAllElements('p') || []).map((x: any) => x.getTextContent().trim()).filter(Boolean);
-        const orgs = (entsEl?.findAllElements('o') || []).map((x: any) => x.getTextContent().trim()).filter(Boolean);
-        const places = (entsEl?.findAllElements('pl') || []).map((x: any) => x.getTextContent().trim()).filter(Boolean);
-        const times = (entsEl?.findAllElements('t') || []).map((x: any) => x.getTextContent().trim()).filter(Boolean);
+        // collect tags/entities/signals/extras
+        const xmlTags: string[] = parseTags(root, 12);
+        const { persons, orgs, artifacts, places, times } = parseEntities(root);
+        const signalsRaw = getText(root, 'signals');
+        const { omissions, text: extrasText } = parseExtras(root);
 
         const base: L1Summary = {
           level: 1,
@@ -165,7 +162,9 @@ export class HierarchicalMemoryCompressor {
           qualityScore: 0.7,
           durationMs: 0,
           tags: xmlTags,
-          entities: { persons, orgs, places, times }
+          entities: { persons, orgs, artifacts, places, times },
+          signals: signalsRaw,
+          extras: (omissions && omissions.length) ? { omissions } : (extrasText ? { text: extrasText } : undefined)
         } as any;
         return base;
       }
@@ -188,15 +187,17 @@ export class HierarchicalMemoryCompressor {
         namingPolicy: 'allow_from_input_only',
         allowedNames: allowedNames2,
         directOutput: true,
+        paceDelayMs: engine.paceDelayMs,
+        retryAttempts: engine.retryAttempts,
+        retryBaseMs: engine.retryBaseMs,
+        retryJitterMs: engine.retryJitterMs,
       });
       const xml = xmlRes.xml || '';
       const parser = new LuciformXMLParser(xml, { mode: 'luciform-permissive', maxTextLength: 100000 });
       const parsedDirect = parser.parse();
       const rootDirect: any = parsedDirect.document?.root;
       if (!rootDirect || rootDirect.name !== 'l1') throw new Error('L1 direct-output XML parse failed');
-      const collectText2 = (node: any): string => { if (!node) return ''; if (node.type === 'text' || node.type === 'cdata') return node.content || ''; return (node.children || []).map(collectText2).join(''); };
-      const getText2 = (name: string) => { const el = rootDirect.findElement(name); return el ? collectText2(el).trim() : ''; };
-      const text = getText2('summary');
+      const text = getText(rootDirect, 'summary');
       if (!text) throw new Error('Empty summary');
 
       let summaryText = text;
@@ -272,24 +273,11 @@ export class HierarchicalMemoryCompressor {
       const parsed = parser.parse();
       const root: any = parsed.document?.root;
       if (!root) return { summary: '', tags: [], persons: [], artifacts: [], places: [], times: [], signalsRaw: '', omissions: [], extrasText: '' } as any;
-      const collectText = (node: any): string => {
-        if (!node) return '';
-        if (node.type === 'text' || node.type === 'cdata') return node.content || '';
-        return (node.children || []).map(collectText).join('');
-      };
-      const getTextFrom = (name: string) => { const el = root.findElement(name); return el ? collectText(el).trim() : ''; };
-      const summary = getTextFrom('summary');
-      const tagsEl: any = root.findElement('tags');
-      const tags: string[] = (tagsEl?.findAllElements('tag') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
-      const entitiesEl: any = root.findElement('entities');
-      const persons = (entitiesEl?.findAllElements('p') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
-      const artifacts = (entitiesEl?.findAllElements('a') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
-      const places = (entitiesEl?.findAllElements('pl') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
-      const times = (entitiesEl?.findAllElements('t') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
-      const signalsRaw = getTextFrom('signals');
-      const extrasEl = root.findElement('extras');
-      const omissions = (extrasEl?.findAllElements('omission') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
-      const extrasText = extrasEl ? collectText(extrasEl).trim() : '';
+      const summary = getText(root, 'summary');
+      const tags: string[] = parseTags(root, 12);
+      const { persons, artifacts, places, times } = parseEntities(root);
+      const signalsRaw = getText(root, 'signals');
+      const { omissions, text: extrasText } = parseExtras(root);
       return { summary, tags, persons, artifacts, places, times, signalsRaw, omissions, extrasText };
     };
 

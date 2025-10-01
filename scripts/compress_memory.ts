@@ -5,6 +5,9 @@ import fetch from 'node-fetch';
 import { GoogleGenAI } from '@google/genai';
 import { LuciformXMLParser } from '@/lib/xml-parser/index';
 import { generateStructuredXML } from '@/lib/summarization/xmlEngine';
+import { runPool } from '@/lib/hmm/runPool';
+import { evaluateUnderflow } from '@/lib/hmm/policies';
+import { buildChatDoc } from '@/lib/hmm/adapters/chatAdapter';
 
 type ParsedItem = {
   index: number;
@@ -24,6 +27,7 @@ function toConvMessages(block: ParsedItem[]) {
   }));
 }
 
+
 async function main() {
   const args = process.argv.slice(2);
   const getArg = (name: string, def?: string) => {
@@ -40,6 +44,19 @@ async function main() {
   const autoWindow = (getArg('--auto-window', 'false') || 'false').toLowerCase() === 'true';
   const structured = (getArg('--structured', 'true') || 'true').toLowerCase() === 'true';
   const structuredXml = (getArg('--structured-xml', 'false') || 'false').toLowerCase() === 'true';
+  // Persona/profile + role remap for xmlEngine
+  const profile = (getArg('--profile', 'chat_assistant_fp') || 'chat_assistant_fp') as any;
+  const personaName = getArg('--persona-name', 'ShadeOS')!;
+  const roleMapArg = getArg('--role-map', 'assistant=ShadeOS,user=Lucie')!; // comma-separated
+  const roleMap: Record<string,string> = {};
+  for (const kv of roleMapArg.split(',').map(s=>s.trim()).filter(Boolean)) {
+    const m = kv.split('='); if (m.length === 2) roleMap[m[0]] = m[1];
+  }
+  const displayRole = (r: 'user'|'assistant'|'unknown') => {
+    const key = r === 'unknown' ? 'user' : r;
+    return roleMap[key] || (key === 'assistant' ? 'Assistant' : interlocutor);
+  };
+
   const modelOverride = getArg('--model');
   const concurrency = Number(getArg('--concurrency', '3'));
   const maxSummary = Number(getArg('--max-summary', '400')); // longueur max autorisée du résumé
@@ -51,6 +68,25 @@ async function main() {
   const shortMode = (getArg('--short-mode', 'regenerate') || 'regenerate').toLowerCase() as 'accept' | 'regenerate' | 'error';
   const vertexMaxOutputTokens = Number(getArg('--max-output-tokens', '512'));
   const allowHeuristicFallback = (getArg('--allow-heuristic-fallback', 'true') || 'true').toLowerCase() === 'true';
+  // Partial regeneration: comma/range list like "57-68,75,80-83"
+  const onlyIndicesArg = getArg('--only-indices');
+  const onlyIndices: number[] | undefined = onlyIndicesArg ? (() => {
+    const out: number[] = [];
+    for (const part of (onlyIndicesArg || '').split(',').map(s => s.trim()).filter(Boolean)) {
+      const m = part.match(/^(\d+)-(\d+)$/);
+      if (m) {
+        const a = Number(m[1]); const b = Number(m[2]);
+        if (!Number.isNaN(a) && !Number.isNaN(b)) {
+          const lo = Math.min(a, b), hi = Math.max(a, b);
+          for (let i = lo; i <= hi; i++) out.push(i);
+        }
+      } else {
+        const v = Number(part);
+        if (!Number.isNaN(v)) out.push(v);
+      }
+    }
+    return Array.from(new Set(out)).sort((a,b)=>a-b);
+  })() : undefined;
 
   if (modelOverride) {
     const cleaned = modelOverride.startsWith('models/') ? modelOverride.slice(7) : modelOverride;
@@ -191,8 +227,8 @@ async function main() {
       attempt += 1;
       try {
         if (structuredXml) {
-          // Build documents block for XML engine
-          const docs = block.items.map((m, i) => `---\n[Msg #${m.index} | ${m.charCount} chars | ${m.role}]\n${m.content}`).join('\n');
+          // Build documents block for XML engine (via chat adapter)
+          const { docs } = buildChatDoc(block.items as any, { roleMap, interlocutor, personaName });
           const xmlRes = await generateStructuredXML('l1', docs, {
             useVertex,
             project,
@@ -202,6 +238,7 @@ async function main() {
             callTimeoutMs: timeoutMs,
             minChars: minSummary > 0 ? minSummary : 100,
             maxChars: limit,
+            userName: interlocutor,
           });
           let xml = xmlRes.xml;
           if (!xml || !xml.includes('<l1')) {
@@ -241,12 +278,13 @@ async function main() {
 
           // Build base object now and enrich later with tags/entities
           let summaryText: string = summaryTextXml;
-          if (minSummary > 0 && summaryText.length < minSummary && shortMode === 'regenerate') {
-            // Retry once with stronger target
+          const under = evaluateUnderflow(summaryText.length, minSummary, shortMode);
+          if (under.decision === 'regenerate') {
             const xmlRes2 = await generateStructuredXML('l1', docs, {
               useVertex, project, location, model: modelName,
               maxOutputTokens: Math.max(vertexMaxOutputTokens, 1024), callTimeoutMs: timeoutMs,
-              minChars: minSummary, maxChars: limit,
+              minChars: Math.max(minSummary, 100), maxChars: limit,
+              userName: interlocutor,
             });
             const xml2 = xmlRes2.xml || '';
             if (xml2.includes('<l1')) {
@@ -256,11 +294,14 @@ async function main() {
               const s2 = r2 ? get2('summary') : '';
               if (s2 && s2.length >= minSummary) summaryText = s2;
             }
+          } else if (under.decision === 'error') {
+            throw new Error(under.message);
           }
 
           // Compute final base
           const base: any = {
             level: 1,
+            index: idx,
             covers: block.items.map(m => m.index),
             charCount: block.charCount,
             summary: summaryText,
@@ -292,24 +333,39 @@ async function main() {
           }
           return { idx, base };
         }
-        // Non-XML mode (existing path)
-        const prompt = buildPrompt(block.items, interlocutor, minSummary > 0 ? minSummary : undefined, limit);
-        const ctrl = new AbortController();
-        const t = setTimeout(() => ctrl.abort(), timeoutMs);
-        try {
-          const resp: any = await genAI.models.generateContent({
-            model: modelName,
-            contents: prompt,
-            generationConfig: { maxOutputTokens: Math.max(vertexMaxOutputTokens, 768), temperature: 0.3 }
-          } as any);
-          const text = (resp?.text || resp?.response?.text || '').trim();
-          if (!text) throw new Error('Empty summary');
-          result = {
-            summary: text,
-            compressionRatio: text.length / Math.max(1, block.charCount),
-            qualityScore: 0.7
-          };
-        } finally { clearTimeout(t); }
+        // Non-XML mode now also goes through xmlEngine (directOutput)
+        const { docs, allowedNames } = buildChatDoc(block.items as any, { roleMap, interlocutor, personaName });
+        const xmlRes = await generateStructuredXML('l1', docs, {
+          useVertex,
+          project,
+          location,
+          model: modelName,
+          maxOutputTokens: Math.max(vertexMaxOutputTokens, 768),
+          callTimeoutMs: timeoutMs,
+          minChars: minSummary > 0 ? minSummary : 100,
+          maxChars: limit,
+          profile,
+          personaName,
+          addressing: 'first_person',
+          allowSecondPerson: false,
+          namingPolicy: 'allow_from_input_only',
+          allowedNames,
+          directOutput: true,
+        });
+        const xml = xmlRes.xml || '';
+        const parser = new LuciformXMLParser(xml, { mode: 'luciform-permissive', maxTextLength: 100000 });
+        const parsedDirect = parser.parse();
+        const rootDirect: any = parsedDirect.document?.root;
+        if (!rootDirect || rootDirect.name !== 'l1') throw new Error('L1 direct-output XML parse failed');
+        const collectText2 = (node: any): string => { if (!node) return ''; if (node.type === 'text' || node.type === 'cdata') return node.content || ''; return (node.children || []).map(collectText2).join(''); };
+        const getText2 = (name: string) => { const el = rootDirect.findElement(name); return el ? collectText2(el).trim() : ''; };
+        const text = getText2('summary');
+        if (!text) throw new Error('Empty summary');
+        result = {
+          summary: text,
+          compressionRatio: text.length / Math.max(1, block.charCount),
+          qualityScore: 0.7
+        };
         break;
       } catch (e: any) {
         lastErr = e;
@@ -322,10 +378,10 @@ async function main() {
     if (!result) throw lastErr;
     let summaryText: string = result.summary;
 
-    // Handle underflow/truncation similar to L2 options
-    if (minSummary > 0 && summaryText.length < minSummary) {
-      const msg = `L1 too short: len=${summaryText.length} < min=${minSummary} (blockChars=${block.charCount})`;
-      if (shortMode === 'regenerate') {
+    // Handle underflow/truncation via policy
+    {
+      const under = evaluateUnderflow(summaryText.length, minSummary, shortMode);
+      if (under.decision === 'regenerate') {
         try {
           const prompt2 = buildPrompt(block.items, interlocutor, minSummary, limit) + `\n\nIMPORTANT: Assure-toi que le texte atteint au minimum ${minSummary} caractères sans couper la dernière phrase.`;
           const resp2: any = await genAI.models.generateContent({
@@ -339,21 +395,22 @@ async function main() {
             summaryText = text2;
           } else {
             console.warn(`⚠️ L1 retry still short: len=${text2?.length || 0}. ${shortMode === 'accept' ? 'Accepting' : 'Keeping original short summary.'}`);
-            if (shortMode === 'error') throw new Error(msg);
+            if (shortMode === 'error') throw new Error(under.message);
           }
         } catch (e) {
           console.warn(`⚠️ L1 retry failed: ${String((e as any)?.message || e)}`);
           if (shortMode === 'error') throw e;
         }
-      } else if (shortMode === 'error') {
-        throw new Error(msg);
-      } else {
-        console.warn(`⚠️ ${msg} — ACCEPT (mode=accept)`);
+      } else if (under.decision === 'error') {
+        throw new Error(under.message);
+      } else if (under.decision === 'accept') {
+        console.warn(`⚠️ ${under.message}`);
       }
     }
 
     const base: any = {
       level: 1,
+      index: idx,
       covers: block.items.map(m => m.index),
       charCount: block.charCount,
       summary: summaryText,
@@ -384,31 +441,104 @@ async function main() {
     return { idx, base };
   }
 
-  async function runPool<T, R>(items: T[], worker: (it: T, i: number) => Promise<R>, limit = 3): Promise<R[]> {
-    const results: R[] = new Array(items.length) as any;
-    let next = 0;
-    const running: Promise<void>[] = [];
-    async function runOne(i: number) {
-      try { const r = await worker(items[i], i); (results as any)[i] = r; }
-      catch (e) { throw e; }
-    }
-    while (next < items.length || running.length > 0) {
-      while (next < items.length && running.length < limit) {
-        const i = next++;
-        const p = runOne(i).then(() => {
-          const idx = running.indexOf(p as any);
-          if (idx >= 0) running.splice(idx, 1);
-        });
-        running.push(p as any);
-      }
-      if (running.length > 0) await Promise.race(running);
-    }
-    return results;
-  }
+  
 
   // After scanning and pushing blocks, process them
-  const results = await runPool(blocks, summarizeBlock, Math.max(1, Number(getArg('--concurrency', '4'))));
-  for (const r of results) summaries.push((r as any).base);
+  // If only-indices is set, reuse previous summaries for non-selected indices
+  const compressor = new HierarchicalMemoryCompressor();
+  const l1EngineOpts = {
+    useVertex,
+    project,
+    location,
+    model: modelName,
+    callTimeoutMs: timeoutMs,
+    maxOutputTokens: vertexMaxOutputTokens,
+    minSummary,
+    maxSummary,
+    targetRatio,
+    structuredXml,
+    allowHeuristicFallback,
+    profile,
+    personaName,
+    interlocutor,
+    roleMap,
+    shortMode,
+  } as any;
+
+  if (onlyIndices && onlyIndices.length > 0) {
+    const outPath = path.join(outDir, `${slug}.l1.json`);
+    // Load previous if exists
+    let prev: any | undefined;
+    try { const rawPrev = await fs.readFile(outPath, 'utf8'); prev = JSON.parse(rawPrev); } catch {}
+    if (!prev || !Array.isArray(prev.summaries)) {
+      throw new Error(`--only-indices requires an existing L1 file at ${outPath}`);
+    }
+    // Build a map by covers signature to be resilient to rewindowing
+    const prevByCovers = new Map<string, any>();
+    for (let i = 0; i < prev.summaries.length; i++) {
+      const s = prev.summaries[i];
+      const key = JSON.stringify((s && s.covers) || []);
+      if (!prevByCovers.has(key)) prevByCovers.set(key, s);
+    }
+    const final: any[] = new Array(blocks.length);
+    // Pre-fill from previous
+    for (let i = 0; i < blocks.length; i++) {
+      const covers = blocks[i].items.map(m => m.index);
+      const key = JSON.stringify(covers);
+      const existing = prevByCovers.get(key) || prev.summaries[i];
+      if (existing) {
+        if (typeof existing.index !== 'number') existing.index = i;
+        final[i] = existing;
+      }
+    }
+    // Select indices to regenerate within bounds
+    const selected = onlyIndices.filter(i => i >= 0 && i < blocks.length);
+    const jobs = selected.map(i => i);
+    const selectedBlocks = jobs.map(i => blocks[i]);
+    const newSummaries = await compressor.summarizeL1Blocks(selectedBlocks as any, l1EngineOpts, Math.max(1, Number(getArg('--concurrency', '4'))));
+    for (let k = 0; k < jobs.length; k++) {
+      const idx = jobs[k];
+      final[idx] = newSummaries[k];
+    }
+    // Ensure all non-selected are present
+    for (let i = 0; i < final.length; i++) {
+      if (!final[i]) throw new Error(`Missing previous summary for block #${i}; rerun without --only-indices or regenerate a larger range.`);
+    }
+    for (const s of final) summaries.push(s);
+  } else {
+    const results = await compressor.summarizeL1Blocks(blocks as any, l1EngineOpts, Math.max(1, Number(getArg('--concurrency', '4'))));
+    for (const r of results) summaries.push(r as any);
+  }
+
+  // Optional algorithmic enrichment (structured mode)
+  if (structured && extractAlgorithmicTags && extractArtifacts) {
+    try {
+      // build quick map from covers signature to block items
+      const blockByCovers = new Map<string, Block>();
+      for (const b of blocks) {
+        const key = JSON.stringify(b.items.map(m => m.index));
+        blockByCovers.set(key, b);
+      }
+      for (const s of summaries as any[]) {
+        const key = JSON.stringify((s && s.covers) || []);
+        const b = blockByCovers.get(key);
+        if (!b) continue;
+        const parsedMsgs = b.items.map(m => ({ index: m.index, content: m.content, lineStart: m.lineStart, lineEnd: m.lineEnd }));
+        const algoTags = extractAlgorithmicTags(parsedMsgs, 3, 8) || [];
+        const artifacts = extractArtifacts(parsedMsgs) || [];
+        const tagSet = new Set<string>();
+        for (const t of (s.tags || [])) tagSet.add(String(t).toLowerCase());
+        for (const t of algoTags) tagSet.add(String(t).toLowerCase());
+        s.tags = Array.from(tagSet).slice(0, 12);
+        s.artifacts = artifacts.map((a: any) => a.type === 'code_block'
+          ? { type: a.type, lang: a.lang, hash: a.hash, messageIndices: a.messageIndices, lineRanges: a.lineRanges }
+          : { type: (a as any).type, value: (a as any).value, messageIndices: (a as any).messageIndices, lineRanges: (a as any).lineRanges }
+        );
+      }
+    } catch (err) {
+      console.warn('Structured L1 enrichment (post) failed:', (err as any)?.message || err);
+    }
+  }
 
   const out = {
     slug,

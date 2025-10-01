@@ -32,7 +32,12 @@ export async function generateStructuredXML(
   documents: string,
   opts: XmlEngineOpts
 ): Promise<{ xml: string; strategy: 'primary' | 'retry' | 'none'; }> {
-  const ai = new GoogleGenAI(opts.useVertex ? { vertexai: true, project: opts.project, location: opts.location } as any : {} as any);
+  const nonVertexApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENAI_API_KEY;
+  const ai = new GoogleGenAI(
+    opts.useVertex
+      ? ({ vertexai: true, project: opts.project, location: opts.location } as any)
+      : (nonVertexApiKey ? ({ apiKey: nonVertexApiKey } as any) : ({} as any))
+  );
 
   const soft = opts.hintTarget ? `Objectif longueur: ${opts.hintTarget} caractères (cible douce).` : '';
   const cap = opts.hintCap ? `Ne JAMAIS dépasser ${opts.hintCap} caractères (cap dur).` : '';
@@ -67,7 +72,10 @@ export async function generateStructuredXML(
       ? `Style interne d'organisation, clair et factuel.`
       : `Style neutre, clair et concis.`;
 
-  const prompt = `Rôle: ${persona}\n${addressLine}\n${styleHint}\n${namingLine}\n${soft} ${cap}\nProduis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):\n\n${schema}\n\nDocuments:\n${documents}`;
+  const narrativeHint = mode === 'l1' && addressing === 'first_person'
+    ? `Style narratif de conversation: raconte le déroulé des échanges en "je" en mentionnant l'interlocuteur par son prénom tel qu'il apparaît dans les Documents (ex.: "Lucie a dit...", "je lui ai répondu..."). Décris l'alternance des tours (ce qui a été demandé, ce que j'ai expliqué ensuite), avec des transitions naturelles. Pas de listes à puces, pas d'adresses en "tu/vous".`
+    : '';
+  const prompt = `Rôle: ${persona}\n${addressLine}\n${styleHint}\n${namingLine}\n${soft} ${cap}\n${narrativeHint}\nProduis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):\n\n${schema}\n\nDocuments:\n${documents}`;
 
   const attempts = [
     { model: opts.model, maxOutputTokens: opts.maxOutputTokens, temperature: 0.3 },

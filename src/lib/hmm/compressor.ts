@@ -1,5 +1,5 @@
 import { GoogleGenAI } from '@google/genai';
-import { LuciformXMLParser } from '@/lib/xml-parser/index';
+import { LuciformXMLParser } from '@luciformresearch/xmlparser';
 import { generateStructuredXML } from '@/lib/summarization/xmlEngine';
 import { runPool } from '@/lib/hmm/runPool';
 import { evaluateUnderflow } from '@/lib/hmm/policies';
@@ -101,6 +101,8 @@ export class HierarchicalMemoryCompressor {
           maxChars: limit,
           profile: engine.profile,
           personaName: engine.personaName,
+          addressing: 'first_person',
+          allowSecondPerson: false,
           namingPolicy: 'allow_from_input_only',
           allowedNames,
         });
@@ -169,7 +171,7 @@ export class HierarchicalMemoryCompressor {
       }
 
       // Direct-output non-structured: still go through xmlEngine (minimal XML wrapper)
-      const { docs: plainDocs, allowedNames } = buildChatDoc(block.items, { roleMap: engine.roleMap, interlocutor: engine.interlocutor, personaName: engine.personaName });
+      const { docs: plainDocs, allowedNames: allowedNames2 } = buildChatDoc(block.items, { roleMap: engine.roleMap, interlocutor: engine.interlocutor, personaName: engine.personaName });
       const xmlRes = await generateStructuredXML('l1', plainDocs, {
         useVertex: engine.useVertex,
         project: engine.project,
@@ -184,7 +186,7 @@ export class HierarchicalMemoryCompressor {
         addressing: 'first_person',
         allowSecondPerson: false,
         namingPolicy: 'allow_from_input_only',
-        allowedNames,
+        allowedNames: allowedNames2,
         directOutput: true,
       });
       const xml = xmlRes.xml || '';
@@ -209,7 +211,6 @@ export class HierarchicalMemoryCompressor {
         } as any);
         const text2 = (resp2?.text || resp2?.response?.text || '').trim();
         if (text2 && text2.length >= engine.minSummary) summaryText = text2;
-        else if (under.decision === 'error') throw new Error(under.message);
       } else if (under.decision === 'error') {
         throw new Error(under.message);
       }
@@ -255,7 +256,7 @@ export class HierarchicalMemoryCompressor {
   }
 
   async summarizeL2Groups(
-    groups: L1Summary[],
+    groups: L1Summary[][],
     engine: {
       useVertex: boolean; project?: string; location?: string; model: string; callTimeoutMs: number; maxOutputTokens: number;
       l2Multiplier: number; l2Wiggle: number; hardMin: number; l2SoftTarget: number;

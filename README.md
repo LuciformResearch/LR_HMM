@@ -37,9 +37,11 @@ npx tsx scripts/compress_memory.ts \
   --role-map "assistant=ShadeOS,user=Lucie" \
   --window-chars 4000 \
   --min-summary 250 --max-summary 400 --short-mode regenerate \
-  --concurrency 33 \
+  --concurrency 20 \
+  --batch-delay-ms 3000 \
   --max-output-tokens 1024 \
-  --allow-heuristic-fallback true
+  --allow-heuristic-fallback true \
+  --engine-retry-attempts 3 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300
 ```
 
 Variante “non structurée” mais toujours via l’XML Engine (prompt unifié):
@@ -52,9 +54,11 @@ npx tsx scripts/compress_memory.ts \
   --role-map "assistant=ShadeOS,user=Lucie" \
   --window-chars 4000 \
   --min-summary 250 --max-summary 400 --short-mode regenerate \
-  --concurrency 33 \
+  --concurrency 20 \
+  --batch-delay-ms 3000 \
   --max-output-tokens 1024 \
-  --allow-heuristic-fallback true
+  --allow-heuristic-fallback true \
+  --engine-retry-attempts 3 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300
 ```
 
 Régénération partielle de quelques index (réutilise le JSON existant et remplace uniquement les blocs ciblés):
@@ -77,6 +81,8 @@ npx tsx scripts/compress_memory.ts \
 Notes:
 - Chaque entrée L1 contient un champ `index` qui correspond à sa position dans `summaries[]` (utile pour la régénération ciblée).
 - Le remap des rôles vers `ShadeOS:`/`Lucie:` est contrôlé par `--role-map` et peut être adapté à d’autres canaux (emails, org voice, etc.) via `--profile`/`--persona-name`.
+- L1 structuré inclut désormais `tags`, `entities` (persons, orgs, artifacts, places, times), `signals` (JSON CDATA) et `extras` (omissions/texte). DirectOutput reste minimal et peut être enrichi via extracteurs.
+- Lissage charge API: utilisez `--concurrency` (taille de lot) + `--batch-delay-ms` (pause entre lots) côté script, et les options `--engine-retry-*` pour le backoff interne de l’xmlEngine.
 
 ### Compression mémoire L2 (Vertex AI, XML Engine)
 ```bash
@@ -89,6 +95,7 @@ npx tsx scripts/compress_memory_l2.ts \
   --overflow-mode regenerate --overflow-max-ratio 2.0 --soft-ratio-step 0.3 \
   --hard-min 300 \
   --max-output-tokens 8192 --call-timeout-ms 35000 \
+  --engine-retry-attempts 3 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300 \
   --log
 
 # Debug rapide:

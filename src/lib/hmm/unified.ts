@@ -86,15 +86,25 @@ export function computeLengthPlan(totalChars: number, p: LengthPolicies): Length
   const lvl = clamp(isFinite(p.compressionLevel) ? p.compressionLevel : 0.3, 0.05, 3.0);
   const tgt = Math.max(50, Math.floor(totalChars * lvl));
   const wiggle = clamp(isFinite(p.wiggle) ? p.wiggle : 0.1, 0, 0.8);
+  // Base band from target and wiggle
   let min = Math.max(50, Math.floor(tgt * (1 - wiggle)));
   let max = Math.max(min + 50, Math.floor(tgt * (1 + wiggle)));
+  // Apply absolute range if provided
   if (p.summaryLenRange) {
-    const [rmin, rmax] = p.summaryLenRange;
-    if (isFinite(rmin)) { min = Math.max(min, Math.floor(rmin)); }
-    if (isFinite(rmax) && rmax > 0) { max = Math.min(max, Math.floor(rmax)); }
+    const [rminRaw, rmaxRaw] = p.summaryLenRange;
+    const rmin = isFinite(rminRaw as number) ? Math.max(50, Math.floor(rminRaw as number)) : undefined;
+    const rmax = isFinite(rmaxRaw as number) && (rmaxRaw as number) > 0 ? Math.floor(rmaxRaw as number) : undefined;
+    if (rmin != null) min = Math.max(min, rmin);
+    if (rmax != null) max = Math.min(max, rmax);
+    // If inconsistent, fall back to tight band [rmin,rmax]
+    if (rmin != null && rmax != null && min > max) {
+      min = Math.min(rmin, rmax);
+      max = Math.max(rmin, rmax);
+    }
   }
+  if (min > max) min = max; // final guard
   const hintTarget = clamp(tgt, min, max);
-  const hintCap = max;
+  const hintCap = Math.max(min, max);
   return { totalChars, target: hintTarget, min, max, hintTarget, hintCap };
 }
 

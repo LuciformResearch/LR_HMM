@@ -103,7 +103,10 @@ export async function generateStructuredXML(
   const jitterMs = Math.max(0, opts.retryJitterMs ?? 250);
 
   for (let i = 0; i < retryAttempts; i++) {
-    const a = { model: opts.model, maxOutputTokens: i === 0 ? opts.maxOutputTokens : Math.max(opts.maxOutputTokens, 1024), temperature: i === 0 ? 0.3 : 0.2 };
+    const approxTokensFromChars = (chars: number) => Math.max(128, Math.ceil(chars / 4) + 64);
+    const dynamicTokens = approxTokensFromChars(opts.hintCap || opts.maxChars);
+    const chosenMax = Math.max(opts.maxOutputTokens, dynamicTokens, i === 0 ? 0 : 1024);
+    const a = { model: opts.model, maxOutputTokens: chosenMax, temperature: i === 0 ? 0.3 : 0.2 };
     if ((opts.paceDelayMs ?? 0) > 0) {
       await new Promise(r => setTimeout(r, opts.paceDelayMs as number));
     }

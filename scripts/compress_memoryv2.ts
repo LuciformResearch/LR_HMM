@@ -70,6 +70,8 @@ async function main() {
   const retryAttempts = Number(getArg(args, '--engine-retry-attempts', '2'));
   const retryBaseMs = Number(getArg(args, '--engine-retry-base-ms', '500'));
   const retryJitterMs = Number(getArg(args, '--engine-retry-jitter-ms', '250'));
+  const wantLog = (getArg(args, '--log', 'true') || 'true').toLowerCase() === 'true';
+  const logFile = getArg(args, '--log-file', path.join(outDir, `${slug}.run.log`))!;
 
   // Length policies
   const minSummary = Number(getArg(args, '--min-summary', '250'));
@@ -165,6 +167,7 @@ async function main() {
     allowHeuristicFallback,
     paceDelayMs, retryAttempts, retryBaseMs, retryJitterMs,
     generateSignals, generateExtras,
+    log: wantLog, logFile,
   } as any;
 
   // Summarize via library batched façade

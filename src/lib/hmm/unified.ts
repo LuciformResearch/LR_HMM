@@ -53,6 +53,9 @@ export type SummarizeEngineOptions = PersonaOptions & {
   // Structured sections toggles
   generateSignals?: boolean;
   generateExtras?: boolean;
+  // Logging
+  log?: boolean;
+  logFile?: string;
 };
 
 // Unifying length policies for L1..Lk
@@ -199,9 +202,18 @@ async function summarizeText(
   policies: LengthPolicies,
   opts: { structured: boolean }
 ): Promise<LSummary> {
+  async function log(msg: string) {
+    try {
+      if (!engine.log || !engine.logFile) return;
+      const line = `[${new Date().toISOString()}] [unified] ${msg}\n`;
+      const { appendFile } = await import('fs/promises');
+      await appendFile(engine.logFile, line);
+    } catch {}
+  }
   const useStructured = opts.structured !== false;
   const rootTag = `l${Math.max(1, Math.floor(level || 1))}`;
   let plan = computeLengthPlan(sourceChars, policies);
+  await log(`summarizeText start level=${level} root=${rootTag} sourceChars=${sourceChars} plan[min=${plan.min},max=${plan.max},target=${plan.hintTarget}] structured=${useStructured}`);
 
   const call = async (minChars: number, maxChars: number) => {
     const res = await generateStructuredXML(rootTag, docs, {
@@ -228,6 +240,8 @@ async function summarizeText(
       retryJitterMs: engine.retryJitterMs,
       includeSignals: engine.generateSignals !== false,
       includeExtras: engine.generateExtras !== false,
+      log: engine.log,
+      logFile: engine.logFile,
     });
     let xml = res.xml || '';
     if ((!xml || !xml.includes(`<${rootTag}`)) && engine.allowHeuristicFallback) {
@@ -235,6 +249,7 @@ async function summarizeText(
       const sig = engine.generateSignals === false ? '' : '\n  <signals><![CDATA[{}]]></signals>';
       const ext = engine.generateExtras === false ? '' : '\n  <extras></extras>';
       xml = `<${rootTag}><summary><![CDATA[${fallback}]]></summary><tags></tags><entities></entities>${sig}${ext}\n</${rootTag}>`;
+      await log(`fallback used root=${rootTag} fallbackLen=${fallback.length}`);
     }
     return xml;
   };
@@ -247,12 +262,14 @@ async function summarizeText(
   const s0 = getText(r0, 'summary');
   let produced = s0.length;
   let decision = evaluateLengthOutcome(produced, plan, policies);
+  await log(`first summary len=${produced} decision=${decision.decision}${decision.newCompressionLevel!=null?` nextCompression=${decision.newCompressionLevel}`:''}`);
 
   // Optional regenerate with adjusted compressionLevel
   if (decision.decision === 'regenerate' && typeof decision.newCompressionLevel === 'number') {
     const newPolicies: LengthPolicies = { ...policies, compressionLevel: decision.newCompressionLevel };
     plan = computeLengthPlan(sourceChars, newPolicies);
     xml = await call(plan.min, plan.max);
+    await log(`regenerate called new plan[min=${plan.min},max=${plan.max},target=${plan.hintTarget}]`);
   }
 
   // Parse final
@@ -277,6 +294,7 @@ async function summarizeText(
     signals,
     extras: (omissions && omissions.length) ? { omissions } : (extrasText ? { text: extrasText } : undefined)
   };
+  await log(`summarizeText end level=${out.level} summaryChars=${out.summaryChars} ratio=${out.compressionRatio.toFixed(3)} tags=${out.tags?.length||0}`);
   return out;
 }
 
@@ -366,7 +384,12 @@ export async function summarizeBatched(
     const set = new Set(opts.onlyIndices.filter(n => Number.isFinite(n) && n >= 0).map(n => Math.floor(n)));
     workset = workset.filter(w => set.has(w.idx));
   }
-
+  try {
+    if (engine.log && engine.logFile) {
+      const { appendFile } = await import('fs/promises');
+      await appendFile(engine.logFile, `[${new Date().toISOString()}] [unified] batched start total=${(input as any[]).length} filtered=${workset.length} chunkSize=${chunkSize} delay=${delay}\n`);
+    }
+  } catch {}
   const results: LSummary[] = [];
   for (let i = 0; i < workset.length; i += chunkSize) {
     const slice = workset.slice(i, Math.min(i + chunkSize, workset.length));
@@ -377,6 +400,12 @@ export async function summarizeBatched(
       await new Promise(res => setTimeout(res, delay));
     }
   }
+  try {
+    if (engine.log && engine.logFile) {
+      const { appendFile } = await import('fs/promises');
+      await appendFile(engine.logFile, `[${new Date().toISOString()}] [unified] batched end produced=${results.length}\n`);
+    }
+  } catch {}
   return results;
 }
 

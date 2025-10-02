@@ -4,21 +4,24 @@ This is a quick handoff to resume the work smoothly.
 
 Where To Look First
 - Unified core: `src/lib/hmm/unified.ts`
-  - Types: `RawDataBlock`, `LSummary`, `SummarizeEngineOptions` (now with `generateSignals`, `generateExtras`), `LengthPolicies`.
-  - Length helpers: `computeLengthPlan()`, `evaluateLengthOutcome()`.
-  - Summarizers: `summarizeBlocks()` (L1, root `<l1>` forcé) et `summarizeSummaryGroups()` (Lk, root dynamique `<l{level}>`).
+  - Types: `RawDataBlock`, `LSummary` (entities inclut `others`), `SummarizeEngineOptions` (log/logFile, debugPrompt/promptOutFile, generateSignals/generateExtras), `LengthPolicies`.
+  - Length helpers: `computeLengthPlan()` (clamp target → band par wiggle), `evaluateLengthOutcome()` (retry step en chars).
+  - Summarizers: `summarizeBlocks()` (L1, root `<l1>`) et `summarizeSummaryGroups()` (Lk, root dynamique `<l{level}>`).
+  - Facades: `summarize(...)` et `summarizeBatched(...)` (pacing + `onlyIndices`).
   - Channel prep: `prepareBlocksChat/Document/Email`, `preparePrompt()`.
 - XML engine: `src/lib/summarization/xmlEngine.ts`
-  - Unified schema for all levels: dynamic root `<lN>` (N=1..k), union fields: `summary`, `tags`, `entities{persons,orgs,artifacts,places,times}`, `signals`, `extras`.
-  - Pacing/backoff: `paceDelayMs`, `retry*`; toggles: `includeSignals`, `includeExtras`.
-- XML helpers: `src/lib/hmm/xmlHelpers.ts` (getText/collectText/parse*).
+  - Unified schema `<lN>`; `<summary targetLen="...">`, `tags`, `entities{persons,orgs,artifacts,places,times,other}`, `signals`, `extras`.
+  - Prompt refactor: Rôle/Situation/(Conversation avec ...), règles <summary> (1ʳᵉ pers., factuel, pas de tu/vous hors citation), longueur appliquée à <summary> uniquement.
+  - Cap dur conditionnel: affiché seulement si non `ratio-only`.
+  - Pacing/backoff: `paceDelayMs`, `retry*`. Debug prompts: `debugPrompt`/`promptOutFile` (pas d'appel API).
+- XML helpers: `src/lib/hmm/xmlHelpers.ts` (parseTags/parseEntities inclut `others`, parseExtras, getText/collectText).
 - Legacy compressor: `src/lib/hmm/compressor.ts` (référence seulement).
 
 Current Status (end of session)
-- Schema unifié dynamique `<lN>` en place, options `includeSignals/includeExtras` branchées (via `generateSignals/generateExtras`).
-- Unified API opérationnelle (blocks et groups). Préparation par canal (chat/doc/email) disponible.
-- Helper commun `summarizeText(...)` câblé; `summarizeBlocks()` et `summarizeSummaryGroups()` l'utilisent.
-- Façade haut niveau `summarize(input, engine, policies, opts)` ajoutée (dispatch L1 vs Lk).
+- Schéma structuré unifié `<lN>` (+ `other` sous `entities`), prompts refactorés.
+- API unifiée L1/Lk opérationnelle; helper `summarizeText(...)` câblé; facades `summarize(..)`/`summarizeBatched(..)`.
+- Ratio-only: objectif longueur appliqué à `<summary>` uniquement; cap dur omis; tokens dynamiques.
+- Logging riche + debug-prompts.
 
 Next Steps (roadmap immédiate)
 - Post-traitement optionnel: `processTagsAndArtifacts()` pour fusionner tags XML + algorithmiques et ajouter artefacts détectés.
@@ -31,10 +34,12 @@ How To Run (current scripts)
   - `PROJECT_ID` ou `GOOGLE_CLOUD_PROJECT`
   - `VERTEX_LOCATION` (e.g. `europe-west1`)
   - Optionnel: `GEMINI_API_KEY` pour fallback Studio
-- L1 (structuré + pacing/backoff):
-  - npx tsx scripts/compress_memory.ts --slug 2025-06-25__orage_codé_textuel --vertexai true --model gemini-2.5-flash --structured true --structured-xml true --profile chat_assistant_fp --persona-name ShadeOS --role-map "assistant=ShadeOS,user=Lucie" --window-chars 4000 --min-summary 250 --max-summary 400 --short-mode regenerate --concurrency 20 --batch-delay-ms 3000 --max-output-tokens 1024 --allow-heuristic-fallback true --engine-retry-attempts 3 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300
-- L2:
-  - npx tsx scripts/compress_memory_l2.ts --slug 2025-06-25__orage_codé_textuel --vertexai true --model gemini-2.5-flash --group-size 5 --concurrency 8 --use-xml-engine true --l2-multiplier 1.5 --l2-soft-target 1.0 --l2-wiggle 0.2 --overflow-mode regenerate --overflow-max-ratio 2.0 --soft-ratio-step 0.3 --hard-min 300 --max-output-tokens 8192 --call-timeout-ms 35000 --engine-retry-attempts 3 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300 --log
+- L1 (v2, structuré):
+  - npx tsx scripts/compress_memoryv2.ts --slug 2025-06-25__orage_codé_textuel --level 1 --vertexai true --model gemini-2.5-flash --profile chat_assistant_fp --persona-name ShadeOS --role-map "assistant=ShadeOS,user=Lucie" --window-chars 4000 --min-summary 250 --max-summary 400 --short-mode regenerate --overflow-mode regenerate --concurrency 20 --batch-delay-ms 3000 --max-output-tokens 1024 --engine-retry-attempts 2 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300 --log
+- L1 (v2, ratio-only):
+  - npx tsx scripts/compress_memoryv2.ts --slug 2025-06-25__orage_codé_textuel --level 1 --ratio-only true --target-ratio 0.10 --short-mode accept --overflow-mode accept --vertexai true --model gemini-2.5-flash --window-chars 4000 --concurrency 20 --batch-delay-ms 1500 --engine-retry-attempts 1 --profile chat_assistant_fp --persona-name ShadeOS --role-map "assistant=ShadeOS,user=Lucie" --log
+- L2 (v2):
+  - npx tsx scripts/compress_memoryv2.ts --slug 2025-06-25__orage_codé_textuel --level 2 --group-size 5 --from-l1 artefacts/HMM/compressed/2025-06-25__orage_codé_textuel.l1.v2.json --vertexai true --model gemini-2.5-flash --target-ratio 0.15 --wiggle 0.2 --overflow-mode regenerate --underflow-mode regenerate --concurrency 8 --max-output-tokens 4096 --call-timeout-ms 35000 --engine-retry-attempts 2 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300 --log
 
 Approvals / Escalations
 - Vertex (réseau) + ADC requis; scripts chargent `.env.local` automatiquement (dotenv).
@@ -43,7 +48,9 @@ Approvals / Escalations
 
 Notes
 - Concurrency = taille de lot; pacing entre lots via `--batch-delay-ms` côté scripts, plus `paceDelayMs/retry*` côté xmlEngine.
-- `generateSignals` et `generateExtras` permettent d’ajuster la structure de sortie sans dépendre du niveau.
+- `generateSignals` et `generateExtras` ajustent la structure indépendamment du niveau.
+- Debug-prompt: `--debug-prompt true` + `--prompt-file` écrit le prompt exact (et n’appelle pas l’API) dans `artefacts/prompts/...`.
+- Logging détaillé dans `artefacts/logs/...` (tentatives, backoff, hasRoot, plans).
 
 Files Modified This Session
 - src/lib/hmm/unified.ts, src/lib/summarization/xmlEngine.ts, src/lib/hmm/xmlHelpers.ts, README.md, REGENERATE_CONTEXT.md.

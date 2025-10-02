@@ -26,13 +26,15 @@ docker compose -f docker-compose.db.yml up -d
 npx tsx scripts/check_vertexai_access.ts
 ```
 
-### Compression mémoire L1 (Vertex + XML Engine)
-Exemple “batch complet” (profil chat assistant, persona ShadeOS), en sortie structurée XML (summary + tags + entities):
+### Compression mémoire L1 — Nouvelle façade unifiée (v2)
+Le script `compress_memoryv2.ts` utilise l’API unifiée (`summarize`/`summarizeBatched`) et le moteur XML refactoré.
+
+Exemple “batch complet” (profil chat assistant, persona ShadeOS), sortie structurée (summary + tags + entities{persons, orgs, artifacts, places, times, other} + signals + extras):
 ```bash
-npx tsx scripts/compress_memory.ts \
+npx tsx scripts/compress_memoryv2.ts \
   --slug 2025-06-25__orage_codé_textuel \
   --vertexai true --model gemini-2.5-flash \
-  --structured true --structured-xml true \
+  --level 1 \
   --profile chat_assistant_fp --persona-name ShadeOS \
   --role-map "assistant=ShadeOS,user=Lucie" \
   --window-chars 4000 \
@@ -44,12 +46,16 @@ npx tsx scripts/compress_memory.ts \
   --engine-retry-attempts 3 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300
 ```
 
-Variante “non structurée” mais toujours via l’XML Engine (prompt unifié):
+Variante “ratio-only” (pas de cap dur; objectif de longueur appliqué à <summary> uniquement; utile pour explorer la dérive naturelle):
 ```bash
-npx tsx scripts/compress_memory.ts \
+npx tsx scripts/compress_memoryv2.ts \
   --slug 2025-06-25__orage_codé_textuel \
   --vertexai true --model gemini-2.5-flash \
-  --structured true --structured-xml false \
+  --level 1 \
+  --ratio-only true --target-ratio 0.10 \
+  --short-mode accept --overflow-mode accept \
+  --concurrency 20 --batch-delay-ms 1500 \
+  --engine-retry-attempts 1
   --profile chat_assistant_fp --persona-name ShadeOS \
   --role-map "assistant=ShadeOS,user=Lucie" \
   --window-chars 4000 \
@@ -61,13 +67,13 @@ npx tsx scripts/compress_memory.ts \
   --engine-retry-attempts 3 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300
 ```
 
-Régénération partielle de quelques index (réutilise le JSON existant et remplace uniquement les blocs ciblés):
+Régénération partielle de quelques index (ne traite que les indices demandés):
 ```bash
 # Exemple: régénérer les indices 34, 39, et la plage 43–49
-npx tsx scripts/compress_memory.ts \
+npx tsx scripts/compress_memoryv2.ts \
   --slug 2025-06-25__orage_codé_textuel \
   --vertexai true --model gemini-2.5-flash \
-  --structured true --structured-xml true \
+  --level 1 \
   --profile chat_assistant_fp --persona-name ShadeOS \
   --role-map "assistant=ShadeOS,user=Lucie" \
   --window-chars 4000 \
@@ -84,22 +90,30 @@ Notes:
 - L1 structuré inclut désormais `tags`, `entities` (persons, orgs, artifacts, places, times), `signals` (JSON CDATA) et `extras` (omissions/texte). DirectOutput reste minimal et peut être enrichi via extracteurs.
 - Lissage charge API: utilisez `--concurrency` (taille de lot) + `--batch-delay-ms` (pause entre lots) côté script, et les options `--engine-retry-*` pour le backoff interne de l’xmlEngine.
 
-### Compression mémoire L2 (Vertex AI, XML Engine)
+### Compression mémoire L2 (v2, via `--level`)
+Le script v2 accepte `--level`. Pour L2, fournissez les L1 via `--from-l1` (par défaut: artefacts/HMM/compressed/<slug>.l1.v2.json). Grouping via `--group-size`.
 ```bash
-npx tsx scripts/compress_memory_l2.ts \
+npx tsx scripts/compress_memoryv2.ts \
   --slug 2025-06-25__orage_codé_textuel \
   --vertexai true --model gemini-2.5-flash \
-  --group-size 5 --concurrency 6 \
-  --use-xml-engine true \
-  --l2-multiplier 1.5 --l2-soft-target 1.0 --l2-wiggle 0.2 \
-  --overflow-mode regenerate --overflow-max-ratio 2.0 --soft-ratio-step 0.3 \
-  --hard-min 300 \
-  --max-output-tokens 8192 --call-timeout-ms 35000 \
-  --engine-retry-attempts 3 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300 \
-  --log
+  --level 2 --group-size 5 --concurrency 8 \
+  --from-l1 artefacts/HMM/compressed/2025-06-25__orage_codé_textuel.l1.v2.json \
+  --target-ratio 0.15 --wiggle 0.2 \
+  --overflow-mode regenerate --underflow-mode regenerate \
+  --max-output-tokens 4096 --call-timeout-ms 35000 \
+  --engine-retry-attempts 2 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300 --log
+```
 
-# Debug rapide:
-#   --test true --max-groups 3  (limiter les groupes)
+### Debug & Logs
+Prompt debug (capture le prompt exact et n’appelle pas l’API):
+```bash
+npx tsx scripts/compress_memoryv2.ts \
+  --slug 2025-06-25__orage_codé_textuel \
+  --level 1 --only-indices 0 \
+  --debug-prompt true \
+  --profile chat_assistant_fp --persona-name ShadeOS --role-map "assistant=ShadeOS,user=Lucie"
+# Prompts: artefacts/prompts/<slug>.<timestamp>.prompts.txt
+# Logs:    artefacts/logs/<slug>.<timestamp>.run.log
 ```
 
 ### Embeddings vers DB

@@ -59,6 +59,9 @@ export type SummarizeEngineOptions = PersonaOptions & {
   // Debug-prompt passthrough
   debugPrompt?: boolean;
   promptOutFile?: string;
+  // Logging context
+  logStartMs?: number;
+  timeZone?: string; // e.g., 'Europe/Paris'
 };
 
 // Unifying length policies for L1..Lk
@@ -216,7 +219,11 @@ async function summarizeText(
   async function log(msg: string) {
     try {
       if (!engine.log || !engine.logFile) return;
-      const line = `[${new Date().toISOString()}] [unified] ${msg}\n`;
+      const now = Date.now();
+      const tz = engine.timeZone || 'Europe/Paris';
+      const ts = new Date(now).toLocaleString('fr-FR', { timeZone: tz, hour12: false });
+      const since = engine.logStartMs ? ` +${(((now - engine.logStartMs)/1000).toFixed(1))}s` : '';
+      const line = `[${ts}${since}] [unified] ${msg}\n`;
       const { appendFile } = await import('fs/promises');
       await appendFile(engine.logFile, line);
     } catch {}
@@ -401,26 +408,44 @@ export async function summarizeBatched(
     const set = new Set(opts.onlyIndices.filter(n => Number.isFinite(n) && n >= 0).map(n => Math.floor(n)));
     workset = workset.filter(w => set.has(w.idx));
   }
+  const startMs = Date.now();
+  const tz = engine.timeZone || 'Europe/Paris';
   try {
     if (engine.log && engine.logFile) {
       const { appendFile } = await import('fs/promises');
-      await appendFile(engine.logFile, `[${new Date().toISOString()}] [unified] batched start total=${(input as any[]).length} filtered=${workset.length} chunkSize=${chunkSize} delay=${delay}\n`);
+      const ts = new Date(startMs).toLocaleString('fr-FR', { timeZone: tz, hour12: false });
+      await appendFile(engine.logFile, `[${ts}] [unified] batched start total=${(input as any[]).length} filtered=${workset.length} chunkSize=${chunkSize} delay=${delay}\n`);
     }
   } catch {}
   const results: LSummary[] = [];
   for (let i = 0; i < workset.length; i += chunkSize) {
     const slice = workset.slice(i, Math.min(i + chunkSize, workset.length));
     const sliceItems = slice.map(s => s.item);
-    const sliceResults = await summarize(sliceItems as any, engine, policies, { ...opts, concurrency: Math.min(chunkSize, slice.length) });
+    const sliceResults = await summarize(sliceItems as any, { ...engine, logStartMs: startMs, timeZone: tz }, policies, { ...opts, concurrency: Math.min(chunkSize, slice.length) });
     results.push(...sliceResults);
     if (i + chunkSize < workset.length && delay > 0) {
       await new Promise(res => setTimeout(res, delay));
     }
+    try {
+      if (engine.log && engine.logFile) {
+        const { appendFile } = await import('fs/promises');
+        const now = Date.now();
+        const ts = new Date(now).toLocaleString('fr-FR', { timeZone: tz, hour12: false });
+        const since = `+${(((now - startMs)/1000).toFixed(1))}s`;
+        const done = Math.min(i + chunkSize, workset.length);
+        const batches = Math.ceil(workset.length / chunkSize);
+        const batchIdx = Math.floor(i / chunkSize) + 1;
+        await appendFile(engine.logFile, `[${ts} ${since}] [unified] batch ${batchIdx}/${batches} done items=${done}/${workset.length}\n`);
+      }
+    } catch {}
   }
   try {
     if (engine.log && engine.logFile) {
       const { appendFile } = await import('fs/promises');
-      await appendFile(engine.logFile, `[${new Date().toISOString()}] [unified] batched end produced=${results.length}\n`);
+      const now = Date.now();
+      const ts = new Date(now).toLocaleString('fr-FR', { timeZone: tz, hour12: false });
+      const since = `+${(((now - startMs)/1000).toFixed(1))}s`;
+      await appendFile(engine.logFile, `[${ts} ${since}] [unified] batched end produced=${results.length}\n`);
     }
   } catch {}
   return results;

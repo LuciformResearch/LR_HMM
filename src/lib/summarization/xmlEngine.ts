@@ -49,7 +49,12 @@ export async function generateStructuredXML(
   async function log(msg: string) {
     try {
       if (!opts.log || !opts.logFile) return;
-      const line = `[${new Date().toISOString()}] [xmlEngine] ${msg}\n`;
+      const tz = (opts as any).timeZone || 'Europe/Paris';
+      const startMs = (opts as any).logStartMs as number | undefined;
+      const now = Date.now();
+      const ts = new Date(now).toLocaleString('fr-FR', { timeZone: tz, hour12: false });
+      const since = startMs ? ` +${(((now - startMs)/1000).toFixed(1))}s` : '';
+      const line = `[${ts}${since}] [xmlEngine] ${msg}\n`;
       const { appendFile } = await import('fs/promises');
       await appendFile(opts.logFile, line);
     } catch {}

@@ -345,7 +345,10 @@ export async function summarize(
 }
 
 // Batched façade with optional pacing between chunks (for rate limiting)
-export type SummarizeBatchOptions = SummarizeExecOptions & { batchDelayMs?: number };
+export type SummarizeBatchOptions = SummarizeExecOptions & {
+  batchDelayMs?: number;
+  onlyIndices?: number[]; // optional 0-based indices filter
+};
 
 export async function summarizeBatched(
   input: RawDataBlock[] | LSummary[][],
@@ -354,14 +357,23 @@ export async function summarizeBatched(
   opts: SummarizeBatchOptions
 ): Promise<LSummary[]> {
   if (!Array.isArray(input) || input.length === 0) return [];
-  const results: LSummary[] = [];
   const chunkSize = Math.max(1, opts.concurrency || 3);
   const delay = Math.max(0, opts.batchDelayMs || 0);
-  for (let i = 0; i < input.length; i += chunkSize) {
-    const slice = (input as any[]).slice(i, Math.min(i + chunkSize, input.length));
-    const sliceResults = await summarize(slice as any, engine, policies, { ...opts, concurrency: Math.min(chunkSize, slice.length) });
+
+  // Optional indices filtering
+  let workset: { idx: number; item: any }[] = (input as any[]).map((item, idx) => ({ idx, item }));
+  if (opts.onlyIndices && Array.isArray(opts.onlyIndices) && opts.onlyIndices.length > 0) {
+    const set = new Set(opts.onlyIndices.filter(n => Number.isFinite(n) && n >= 0).map(n => Math.floor(n)));
+    workset = workset.filter(w => set.has(w.idx));
+  }
+
+  const results: LSummary[] = [];
+  for (let i = 0; i < workset.length; i += chunkSize) {
+    const slice = workset.slice(i, Math.min(i + chunkSize, workset.length));
+    const sliceItems = slice.map(s => s.item);
+    const sliceResults = await summarize(sliceItems as any, engine, policies, { ...opts, concurrency: Math.min(chunkSize, slice.length) });
     results.push(...sliceResults);
-    if (i + chunkSize < input.length && delay > 0) {
+    if (i + chunkSize < workset.length && delay > 0) {
       await new Promise(res => setTimeout(res, delay));
     }
   }

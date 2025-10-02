@@ -98,6 +98,7 @@ async function main() {
 
   const summaries: any[] = new Array(blocks.length);
 
+  // Lucie: Je veux ce summarize in batches en option coté runPool, ou coté compressor à toi de voir, avec le parametre batch delay ms.
   // Optional pacing: use concurrency as chunk size; sleep between chunks
   const batchDelayMs = Number(getArg('--batch-delay-ms', '0'));
   async function summarizeInBatches(targetBlocks: { items: ParsedItem[]; charCount: number }[], idxOffset = 0) {
@@ -110,6 +111,7 @@ async function main() {
     }
   }
 
+  // Lucie: Je veux onlyIndices coté compressor aussi, qu'il puisse servir aussi bien aux l1 qu'aux L2.
   if (onlyIndices && onlyIndices.length > 0) {
     const outPath = path.join(outDir, `${slug}.l1.json`);
     let prev: any | undefined;
@@ -146,6 +148,7 @@ async function main() {
   }
 
   // Optional algorithmic enrichment
+  // Lucie: pareil doit etre purement coté compressor ça et servir aux l1 autant que l2.
   if (structured) {
     try {
       const mods = await import('@/lib/extractors/artifacts');

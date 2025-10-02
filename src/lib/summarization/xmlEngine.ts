@@ -27,6 +27,8 @@ export type XmlEngineOpts = {
   retryAttempts?: number;        // attempts on 429/timeout (default 2)
   retryBaseMs?: number;          // base backoff (default 500ms)
   retryJitterMs?: number;        // added random jitter (default 250ms)
+  includeSignals?: boolean;      // include <signals> section (default true)
+  includeExtras?: boolean;       // include <extras> section (default true)
 };
 
 /**
@@ -51,9 +53,13 @@ export async function generateStructuredXML(
   const minimalSchema = mode === 'l1'
     ? `<l1 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...]]></summary>\n</l1>`
     : `<l2 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...]]></summary>\n</l2>`;
+  const wantSignals = (opts as any).includeSignals !== false; // default true
+  const wantExtras = (opts as any).includeExtras !== false;   // default true
+  const signalsBlock = wantSignals ? `\n  <signals><![CDATA[{\\"themes\\":[...],\\"timeline\\":[{\\"t\\":\\"00:12\\",\\"event\\":\\"...\\"}]}]]></signals>` : '';
+  const extrasBlock = wantExtras ? `\n  <extras>\n    <omission>...</omission>\n  </extras>` : '';
   const fullSchema = mode === 'l1'
-    ? `<l1 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <orgs><o>...</o></orgs>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>\n  <signals><![CDATA[{\\"themes\\":[...],\\"timeline\\":[{\\"t\\":\\"00:12\\",\\"event\\":\\"...\\"}]}]]></signals>\n  <extras>\n    <omission>...</omission>\n  </extras>\n</l1>`
-    : `<l2 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>\n  <signals><![CDATA[{\\"themes\\":[...],\\"timeline\\":[{\\"t\\":\\"00:12\\",\\"event\\":\\"...\\"}]}]]></signals>\n  <extras>\n    <omission>...</omission>\n  </extras>\n</l2>`;
+    ? `<l1 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <orgs><o>...</o></orgs>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>${signalsBlock}${extrasBlock}\n</l1>`
+    : `<l2 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>${signalsBlock}${extrasBlock}\n</l2>`;
   const schema = opts.directOutput ? minimalSchema : fullSchema;
 
   // Persona/prompt preamble

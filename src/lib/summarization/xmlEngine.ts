@@ -33,6 +33,9 @@ export type XmlEngineOpts = {
   // Logging
   log?: boolean;
   logFile?: string;
+  // Debug-prompt: if true, only log the prompt text (skip API)
+  debugPrompt?: boolean;
+  promptOutFile?: string; // where to write the prompt
 };
 
 /**
@@ -98,6 +101,19 @@ export async function generateStructuredXML(
     ? `Pour la section <summary> UNIQUEMENT: écris à la première personne ("je"), comme si TU étais l'assistant se remémorant sa conversation avec ${interlocutorName}. Raconte le déroulé (ce qui a été demandé, ce que j'ai expliqué ensuite) avec transitions naturelles. Ne t'adresse pas en "tu/vous". Conserve les noms EXACTEMENT tels qu'ils apparaissent dans les Documents (ne remplace pas le nom de l'assistant).`
     : '';
   const prompt = `Rôle: ${persona}\n${addressLine}\n${styleHint}\n${namingLine}\n${soft} ${cap}\n${narrativeHint}\nProduis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):\n\n${schema}\n\nDocuments:\n${documents}`;
+
+  // Debug-prompt mode: write prompt and return immediately
+  if (opts.debugPrompt) {
+    try {
+      if (opts.promptOutFile) {
+        const { appendFile } = await import('fs/promises');
+        const sep = `\n\n===== PROMPT @ ${new Date().toISOString()} | root=${xmlRoot} | min=${opts.minChars} max=${opts.maxChars} hintTarget=${opts.hintTarget} hintCap=${opts.hintCap} model=${opts.model} vertex=${!!opts.useVertex} =====\n`;
+        await appendFile(opts.promptOutFile, sep + prompt + "\n");
+      }
+      await log(`debugPrompt=true wrote prompt to ${opts.promptOutFile || '(none)'}`);
+    } catch {}
+    return { xml: '', strategy: 'none' };
+  }
 
   const retryAttempts = Math.max(1, opts.retryAttempts ?? 2);
   const baseMs = Math.max(0, opts.retryBaseMs ?? 500);

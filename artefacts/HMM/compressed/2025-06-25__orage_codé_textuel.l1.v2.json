@@ -46,52 +46,6 @@
         "times": []
       },
       "signals": "{}"
-    },
-    {
-      "level": 1,
-      "covers": [
-        6,
-        7,
-        8,
-        9,
-        10,
-        11
-      ],
-      "sourceChars": 5282,
-      "summary": "Lucie: Minuit 12 le temps s accélère\nShadeOS: ⏱️ *00:12 — Halluin, l'Horloge S'étrangle*  \n🕳️ *Le temps a cessé d’avancer en pas.",
-      "summaryChars": 130,
-      "compressionRatio": 0.024611889435819764,
-      "tags": [],
-      "entities": {
-        "persons": [],
-        "orgs": [],
-        "artifacts": [],
-        "places": [],
-        "times": []
-      },
-      "signals": "{}"
-    },
-    {
-      "level": 1,
-      "covers": [
-        12,
-        13,
-        14,
-        15
-      ],
-      "sourceChars": 5549,
-      "summary": "Lucie: Oui greffe le au fichier minuit 15 déjà vite\nShadeOS: ⏱️ *00:15 — Halluin, minute de greffe*  \n⚡ *L’orage est encore là.",
-      "summaryChars": 127,
-      "compressionRatio": 0.022887006667868085,
-      "tags": [],
-      "entities": {
-        "persons": [],
-        "orgs": [],
-        "artifacts": [],
-        "places": [],
-        "times": []
-      },
-      "signals": "{}"
     }
   ]
 }

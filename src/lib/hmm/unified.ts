@@ -57,7 +57,7 @@ export type SummarizeEngineOptions = PersonaOptions & {
 
 // Unifying length policies for L1..Lk
 export type LengthPolicies = {
-  compressionLevel: number; // target ratio vs input total chars, e.g. 0.6
+  compressionLevel: number; // target ratio vs input total chars, e.g. 0.3
   wiggle: number;           // +/- tolerance around target, e.g. 0.1 (10%)
   underflowMode: 'accept' | 'regenerate' | 'error';
   overflowMode: 'accept' | 'regenerate' | 'error';
@@ -80,7 +80,7 @@ function clamp(v: number, lo: number, hi: number) {
 
 // Compute min/max/targets from unified length policies
 export function computeLengthPlan(totalChars: number, p: LengthPolicies): LengthPlan {
-  const lvl = clamp(isFinite(p.compressionLevel) ? p.compressionLevel : 0.6, 0.05, 3.0);
+  const lvl = clamp(isFinite(p.compressionLevel) ? p.compressionLevel : 0.3, 0.05, 3.0);
   const tgt = Math.max(50, Math.floor(totalChars * lvl));
   const wiggle = clamp(isFinite(p.wiggle) ? p.wiggle : 0.1, 0, 0.8);
   let min = Math.max(50, Math.floor(tgt * (1 - wiggle)));
@@ -121,7 +121,7 @@ export function evaluateLengthOutcome(
       return { decision: 'reject', message: `Underflow error: len=${producedLen} < min=${min}` };
     }
     const step = Math.max(0.01, policies.regenerateRatioStep || 0.1);
-    const next = (policies.compressionLevel || 0.6) + step;
+    const next = (policies.compressionLevel || 0.3) + step;
     return { decision: 'regenerate', newCompressionLevel: Number(next.toFixed(3)), message: `Underflow: increase compressionLevel by +${step}` };
   }
   if (over) {
@@ -132,7 +132,7 @@ export function evaluateLengthOutcome(
       return { decision: 'reject', message: `Overflow error: len=${producedLen} > max=${max}` };
     }
     const step = Math.max(0.01, policies.regenerateRatioStep || 0.1);
-    const next = (policies.compressionLevel || 0.6) - step;
+    const next = (policies.compressionLevel || 0.3) - step;
     return { decision: 'regenerate', newCompressionLevel: Number(next.toFixed(3)), message: `Overflow: decrease compressionLevel by -${step}` };
   }
   return { decision: 'accept', message: 'No action needed' };
@@ -176,7 +176,7 @@ export type SummarizeExecOptions = {
   directOutput?: boolean;      // if true, minimize schema (summary only)
 };
 
-type XmlMode = 'l1' | 'l2';
+// Helper: pick a quick fallback from the first sentence(s)
 
 function firstSentences(text: string, maxChars: number): string {
   const pick = (t: string) => (t.split(/(?<=[\.!?])\s+/)[0] || t).trim();
@@ -189,95 +189,115 @@ function ensureCharCount(v?: number, text?: string): number {
   return Math.max(0, (text || '').length);
 }
 
+// Shared helper to DRY L1 and Lk summarization flows
+async function summarizeText(
+  docs: string,
+  sourceChars: number,
+  covers: number[] | undefined,
+  level: number,
+  engine: SummarizeEngineOptions,
+  policies: LengthPolicies,
+  opts: { structured: boolean }
+): Promise<LSummary> {
+  const useStructured = opts.structured !== false;
+  const rootTag = `l${Math.max(1, Math.floor(level || 1))}`;
+  let plan = computeLengthPlan(sourceChars, policies);
+
+  const call = async (minChars: number, maxChars: number) => {
+    const res = await generateStructuredXML(rootTag, docs, {
+      useVertex: engine.useVertex,
+      project: engine.project,
+      location: engine.location,
+      model: engine.model,
+      maxOutputTokens: engine.maxOutputTokens,
+      callTimeoutMs: engine.callTimeoutMs,
+      minChars,
+      maxChars,
+      hintTarget: plan.hintTarget,
+      hintCap: plan.hintCap,
+      profile: engine.profile,
+      personaName: engine.personaName,
+      addressing: engine.addressing,
+      allowSecondPerson: engine.allowSecondPerson,
+      namingPolicy: engine.namingPolicy,
+      allowedNames: engine.allowedNames,
+      directOutput: !useStructured,
+      paceDelayMs: engine.paceDelayMs,
+      retryAttempts: engine.retryAttempts,
+      retryBaseMs: engine.retryBaseMs,
+      retryJitterMs: engine.retryJitterMs,
+      includeSignals: engine.generateSignals !== false,
+      includeExtras: engine.generateExtras !== false,
+    });
+    let xml = res.xml || '';
+    if ((!xml || !xml.includes(`<${rootTag}`)) && engine.allowHeuristicFallback) {
+      const fallback = firstSentences(docs, plan.max);
+      const sig = engine.generateSignals === false ? '' : '\n  <signals><![CDATA[{}]]></signals>';
+      const ext = engine.generateExtras === false ? '' : '\n  <extras></extras>';
+      xml = `<${rootTag}><summary><![CDATA[${fallback}]]></summary><tags></tags><entities></entities>${sig}${ext}\n</${rootTag}>`;
+    }
+    return xml;
+  };
+
+  // First attempt
+  let xml = await call(plan.min, plan.max);
+  const parsed0 = new LuciformXMLParser(xml, { mode: 'luciform-permissive', maxTextLength: 300000 }).parse();
+  const r0: any = parsed0.document?.root;
+  if (!r0) throw new Error('XML parse failed');
+  const s0 = getText(r0, 'summary');
+  let produced = s0.length;
+  let decision = evaluateLengthOutcome(produced, plan, policies);
+
+  // Optional regenerate with adjusted compressionLevel
+  if (decision.decision === 'regenerate' && typeof decision.newCompressionLevel === 'number') {
+    const newPolicies: LengthPolicies = { ...policies, compressionLevel: decision.newCompressionLevel };
+    plan = computeLengthPlan(sourceChars, newPolicies);
+    xml = await call(plan.min, plan.max);
+  }
+
+  // Parse final
+  const p2 = new LuciformXMLParser(xml, { mode: 'luciform-permissive', maxTextLength: 300000 }).parse();
+  const r2: any = p2.document?.root;
+  if (!r2) throw new Error('Final XML parse failed');
+  const summaryText = getText(r2, 'summary');
+  const tags = useStructured ? parseTags(r2, 12) : [];
+  const { persons, orgs, artifacts, places, times } = useStructured ? parseEntities(r2) : { persons: [], orgs: [], artifacts: [], places: [], times: [] };
+  const signals = useStructured ? getText(r2, 'signals') : undefined;
+  const { omissions, text: extrasText } = useStructured ? parseExtras(r2) : { omissions: [], text: '' };
+
+  const out: LSummary = {
+    level: Math.max(1, Math.floor(level || 1)),
+    covers,
+    sourceChars,
+    summary: summaryText,
+    summaryChars: summaryText.length,
+    compressionRatio: summaryText.length / Math.max(1, sourceChars),
+    tags,
+    entities: { persons, orgs, artifacts, places, times },
+    signals,
+    extras: (omissions && omissions.length) ? { omissions } : (extrasText ? { text: extrasText } : undefined)
+  };
+  return out;
+}
+
 export async function summarizeBlocks(
   blocks: RawDataBlock[],
   engine: SummarizeEngineOptions,
   policies: LengthPolicies,
   opts: SummarizeExecOptions
 ): Promise<LSummary[]> {
-  // Enforce L1 for blocks
-  const mode: XmlMode = 'l1';
   const concurrency = Math.max(1, opts.concurrency || 3);
-  const useStructured = opts.directOutput ? false : true;
-
-  return runPool(blocks, async (b, i) => {
+  return runPool(blocks, async (b) => {
     const sourceChars = ensureCharCount(b.charCount, b.text);
-    let plan = computeLengthPlan(sourceChars, policies);
-
-    const call = async (minChars: number, maxChars: number) => {
-      const res = await generateStructuredXML(mode, b.text, {
-        useVertex: engine.useVertex,
-        project: engine.project,
-        location: engine.location,
-        model: engine.model,
-        maxOutputTokens: engine.maxOutputTokens,
-        callTimeoutMs: engine.callTimeoutMs,
-        minChars,
-        maxChars,
-        hintTarget: plan.hintTarget,
-        hintCap: plan.hintCap,
-        profile: engine.profile,
-        personaName: engine.personaName,
-        addressing: engine.addressing,
-        allowSecondPerson: engine.allowSecondPerson,
-        namingPolicy: engine.namingPolicy,
-        allowedNames: engine.allowedNames,
-        directOutput: !useStructured,
-        paceDelayMs: engine.paceDelayMs,
-        retryAttempts: engine.retryAttempts,
-        retryBaseMs: engine.retryBaseMs,
-        retryJitterMs: engine.retryJitterMs,
-        includeSignals: engine.generateSignals !== false,
-        includeExtras: engine.generateExtras !== false,
-      });
-      let xml = res.xml || '';
-      if ((!xml || !xml.includes(`<${mode}`)) && engine.allowHeuristicFallback) {
-        const fallback = firstSentences(b.text, plan.max);
-        xml = `<l1><summary><![CDATA[${fallback}]]></summary><tags></tags><entities></entities>${(engine as any).generateSignals===false? '' : '\n  <signals><![CDATA[{}]]></signals>'}\n</l1>`;
-      }
-      return xml;
-    };
-
-    // First attempt
-    let xml = await call(plan.min, plan.max);
-    const parser = new LuciformXMLParser(xml, { mode: 'luciform-permissive', maxTextLength: 200000 });
-    const parsed = parser.parse();
-    const root: any = parsed.document?.root;
-    if (!root) throw new Error('XML parse failed');
-    const summary = getText(root, 'summary');
-    let produced = summary.length;
-    let decision = evaluateLengthOutcome(produced, plan, policies);
-
-    // Optional regenerate with adjusted compressionLevel
-    if (decision.decision === 'regenerate' && typeof decision.newCompressionLevel === 'number') {
-      const newPolicies: LengthPolicies = { ...policies, compressionLevel: decision.newCompressionLevel };
-      plan = computeLengthPlan(sourceChars, newPolicies);
-      xml = await call(plan.min, plan.max);
-    }
-
-    // Parse final
-    const p2 = new LuciformXMLParser(xml, { mode: 'luciform-permissive', maxTextLength: 200000 }).parse();
-    const r2: any = p2.document?.root;
-    if (!r2) throw new Error('Final XML parse failed');
-    const summaryText = getText(r2, 'summary');
-    const tags = useStructured ? parseTags(r2, 12) : [];
-    const { persons, orgs, artifacts, places, times } = useStructured ? parseEntities(r2) : { persons: [], orgs: [], artifacts: [], places: [], times: [] };
-    const signals = useStructured ? getText(r2, 'signals') : undefined;
-    const { omissions, text: extrasText } = useStructured ? parseExtras(r2) : { omissions: [], text: '' };
-
-    const out: LSummary = {
-      level: 1,
-      covers: b.covers,
+    return summarizeText(
+      b.text,
       sourceChars,
-      summary: summaryText,
-      summaryChars: summaryText.length,
-      compressionRatio: summaryText.length / Math.max(1, sourceChars),
-      tags,
-      entities: { persons, orgs, artifacts, places, times },
-      signals,
-      extras: (omissions && omissions.length) ? { omissions } : (extrasText ? { text: extrasText } : undefined)
-    };
-    return out;
+      b.covers,
+      1,
+      engine,
+      policies,
+      { structured: !(opts.directOutput === true) }
+    );
   }, concurrency);
 }
 
@@ -287,90 +307,65 @@ export async function summarizeSummaryGroups(
   policies: LengthPolicies,
   opts: SummarizeExecOptions
 ): Promise<LSummary[]> {
-  // Compute dynamic root tag for higher levels (l2..lk)
   const concurrency = Math.max(1, opts.concurrency || 3);
-  const useStructured = opts.directOutput ? false : true;
-
   function toDocs(g: LSummary[]): string {
     return g.map((s, i) => `---\n[Item #${i + 1} | ${s.summaryChars} chars]\n${s.summary}`).join('\n');
+  }
+
+  return runPool(groups, async (g) => {
+    const totalChars = g.reduce((a, x) => a + (x.summaryChars || 0), 0);
+    const docs = toDocs(g);
+    const covers = g.flatMap(x => x.covers || []);
+    const level = Math.max(2, opts.level || 2);
+    return summarizeText(
+      docs,
+      totalChars,
+      covers,
+      level,
+      engine,
+      policies,
+      { structured: !(opts.directOutput === true) }
+    );
+  }, concurrency);
 }
 
-  return runPool(groups, async (g, gi) => {
-    const totalChars = g.reduce((a, x) => a + (x.summaryChars || 0), 0);
-    let plan = computeLengthPlan(totalChars, policies);
+// ===== Step 2.5: façade summarize() that dispatches by input type =====
+export async function summarize(
+  input: RawDataBlock[] | LSummary[][],
+  engine: SummarizeEngineOptions,
+  policies: LengthPolicies,
+  opts: SummarizeExecOptions
+): Promise<LSummary[]> {
+  if (!Array.isArray(input) || input.length === 0) return [];
+  const first: any = input[0];
+  if (first && typeof first === 'object' && 'text' in first) {
+    return summarizeBlocks(input as RawDataBlock[], engine, policies, opts);
+  }
+  return summarizeSummaryGroups(input as LSummary[][], engine, policies, opts);
+}
 
-    const call = async (minChars: number, maxChars: number) => {
-      const docs = toDocs(g);
-      const rootTag = `l${Math.max(2, opts.level || 2)}`;
-      const res = await generateStructuredXML(rootTag, docs, {
-        useVertex: engine.useVertex,
-        project: engine.project,
-        location: engine.location,
-        model: engine.model,
-        maxOutputTokens: engine.maxOutputTokens,
-        callTimeoutMs: engine.callTimeoutMs,
-        minChars,
-        maxChars,
-        hintTarget: plan.hintTarget,
-        hintCap: plan.hintCap,
-        profile: engine.profile,
-        personaName: engine.personaName,
-        addressing: engine.addressing,
-        allowSecondPerson: engine.allowSecondPerson,
-        namingPolicy: engine.namingPolicy,
-        allowedNames: engine.allowedNames,
-        directOutput: !useStructured,
-        paceDelayMs: engine.paceDelayMs,
-        retryAttempts: engine.retryAttempts,
-        retryBaseMs: engine.retryBaseMs,
-        retryJitterMs: engine.retryJitterMs,
-        includeSignals: engine.generateSignals !== false,
-        includeExtras: engine.generateExtras !== false,
-      });
-      let xml = res.xml || '';
-      if ((!xml || !xml.includes('<l')) && engine.allowHeuristicFallback) {
-        const fallback = firstSentences(docs, plan.max);
-        xml = `<${rootTag}><summary><![CDATA[${fallback}]]></summary><tags></tags><entities></entities>${engine.generateSignals===false? '' : '\n  <signals><![CDATA[{}]]></signals>'}${engine.generateExtras===false? '' : '\n  <extras></extras>'}\n</${rootTag}>`;
-      }
-      return xml;
-    };
+// Batched façade with optional pacing between chunks (for rate limiting)
+export type SummarizeBatchOptions = SummarizeExecOptions & { batchDelayMs?: number };
 
-    let xml = await call(plan.min, plan.max);
-    const p = new LuciformXMLParser(xml, { mode: 'luciform-permissive', maxTextLength: 300000 }).parse();
-    const root: any = p.document?.root;
-    if (!root) throw new Error('XML parse failed');
-    const summary = getText(root, 'summary');
-    const produced = summary.length;
-    const decision = evaluateLengthOutcome(produced, plan, policies);
-    if (decision.decision === 'regenerate' && typeof decision.newCompressionLevel === 'number') {
-      const newPolicies: LengthPolicies = { ...policies, compressionLevel: decision.newCompressionLevel };
-      plan = computeLengthPlan(totalChars, newPolicies);
-      xml = await call(plan.min, plan.max);
+export async function summarizeBatched(
+  input: RawDataBlock[] | LSummary[][],
+  engine: SummarizeEngineOptions,
+  policies: LengthPolicies,
+  opts: SummarizeBatchOptions
+): Promise<LSummary[]> {
+  if (!Array.isArray(input) || input.length === 0) return [];
+  const results: LSummary[] = [];
+  const chunkSize = Math.max(1, opts.concurrency || 3);
+  const delay = Math.max(0, opts.batchDelayMs || 0);
+  for (let i = 0; i < input.length; i += chunkSize) {
+    const slice = (input as any[]).slice(i, Math.min(i + chunkSize, input.length));
+    const sliceResults = await summarize(slice as any, engine, policies, { ...opts, concurrency: Math.min(chunkSize, slice.length) });
+    results.push(...sliceResults);
+    if (i + chunkSize < input.length && delay > 0) {
+      await new Promise(res => setTimeout(res, delay));
     }
-
-    const p2 = new LuciformXMLParser(xml, { mode: 'luciform-permissive', maxTextLength: 300000 }).parse();
-    const r2: any = p2.document?.root;
-    if (!r2) throw new Error('Final XML parse failed');
-    const summaryText = getText(r2, 'summary');
-    const tags = useStructured ? parseTags(r2, 12) : [];
-    const { persons, orgs, artifacts, places, times } = useStructured ? parseEntities(r2) : { persons: [], orgs: [], artifacts: [], places: [], times: [] };
-    const signals = useStructured ? getText(r2, 'signals') : undefined;
-    const { omissions, text: extrasText } = useStructured ? parseExtras(r2) : { omissions: [], text: '' };
-
-    const out: LSummary = {
-      level: Math.max(2, opts.level || 2),
-      covers: g.flatMap(x => x.covers || []),
-      sourceChars: totalChars,
-      summary: summaryText,
-      summaryChars: summaryText.length,
-      compressionRatio: summaryText.length / Math.max(1, totalChars),
-      tags,
-      entities: { persons, orgs, artifacts, places, times },
-      signals,
-      extras: (omissions && omissions.length) ? { omissions } : (extrasText ? { text: extrasText } : undefined)
-    };
-    return out;
-  }, concurrency);
+  }
+  return results;
 }
 
 

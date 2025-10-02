@@ -16,16 +16,13 @@ Where To Look First
 
 Current Status (end of session)
 - Schema unifié dynamique `<lN>` en place, options `includeSignals/includeExtras` branchées (via `generateSignals/generateExtras`).
-- Unified API opérationnelle (blocks et groups). Préparation par canal (chat/doc/email) basique disponible.
-- Helper commun `summarizeText(...)`: design établi et partiellement introduit; à finaliser pour DRY complet (voir section Next Steps).
+- Unified API opérationnelle (blocks et groups). Préparation par canal (chat/doc/email) disponible.
+- Helper commun `summarizeText(...)` câblé; `summarizeBlocks()` et `summarizeSummaryGroups()` l'utilisent.
+- Façade haut niveau `summarize(input, engine, policies, opts)` ajoutée (dispatch L1 vs Lk).
 
 Next Steps (roadmap immédiate)
-- Factor helper commun: brancher entièrement `summarizeBlocks()` et `summarizeSummaryGroups()` sur `summarizeText(docs, sourceChars, covers, engine, policies, { mode: 'lN', structured, levelOut })`.
-- Façade haut niveau: ajouter `summarize(input, engine, policies, opts)` qui dispatch:
-  - `RawDataBlock[]` → L1 (root `<l1>`)
-  - `LSummary[][]` → Lk (root `<l{level}>`)
 - Post-traitement optionnel: `processTagsAndArtifacts()` pour fusionner tags XML + algorithmiques et ajouter artefacts détectés.
-- CLI mince: script unique appelant la façade unifiée (scripts existants conservés pour compat).
+- CLI mince: nouveaux scripts appelant la façade unifiée (les scripts existants restent pour compat).
 
 How To Run (current scripts)
 - `.env.local` (git-ignored) requis:
@@ -49,3 +46,6 @@ Notes
 
 Files Modified This Session
 - src/lib/hmm/unified.ts, src/lib/summarization/xmlEngine.ts, src/lib/hmm/xmlHelpers.ts, README.md, REGENERATE_CONTEXT.md.
+
+New Scripts
+- `scripts/compress_memoryv2.ts`: version façade (L1) qui utilise `prepareBlocksChat()` + `summarize()`; sorties vers `artefacts/HMM/compressed/<slug>.l1.v2.json`.

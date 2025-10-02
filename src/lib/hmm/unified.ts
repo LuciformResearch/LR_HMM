@@ -21,7 +21,7 @@ export type LSummary = {
   qualityScore?: number;
   durationMs?: number;
   tags?: string[];
-  entities?: { persons?: string[]; orgs?: string[]; artifacts?: string[]; places?: string[]; times?: string[] };
+  entities?: { persons?: string[]; orgs?: string[]; artifacts?: string[]; places?: string[]; times?: string[]; others?: string[] };
   signals?: any; // opaque JSON string or object
   extras?: any; // omissions/text metadata
 };
@@ -295,7 +295,7 @@ async function summarizeText(
   if (!r2) throw new Error('Final XML parse failed');
   const summaryText = getText(r2, 'summary');
   const tags = useStructured ? parseTags(r2, 12) : [];
-  const { persons, orgs, artifacts, places, times } = useStructured ? parseEntities(r2) : { persons: [], orgs: [], artifacts: [], places: [], times: [] };
+  const { persons, orgs, artifacts, places, times, others } = useStructured ? parseEntities(r2) : { persons: [], orgs: [], artifacts: [], places: [], times: [], others: [] };
   const signals = useStructured ? getText(r2, 'signals') : undefined;
   const { omissions, text: extrasText } = useStructured ? parseExtras(r2) : { omissions: [], text: '' };
 
@@ -307,7 +307,7 @@ async function summarizeText(
     summaryChars: summaryText.length,
     compressionRatio: summaryText.length / Math.max(1, sourceChars),
     tags,
-    entities: { persons, orgs, artifacts, places, times },
+    entities: { persons, orgs, artifacts, places, times, others },
     signals,
     extras: (omissions && omissions.length) ? { omissions } : (extrasText ? { text: extrasText } : undefined)
   };

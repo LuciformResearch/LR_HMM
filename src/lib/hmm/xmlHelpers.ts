@@ -22,14 +22,15 @@ export function parseTags(root: any, limit = 12): string[] {
   return limit > 0 ? tags.slice(0, limit) : tags;
 }
 
-export function parseEntities(root: any): { persons: string[]; orgs?: string[]; artifacts?: string[]; places?: string[]; times?: string[] } {
+export function parseEntities(root: any): { persons: string[]; orgs?: string[]; artifacts?: string[]; places?: string[]; times?: string[]; others?: string[] } {
   const entitiesEl: any = root?.findElement?.('entities');
   const persons = (entitiesEl?.findAllElements?.('p') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
   const orgs = (entitiesEl?.findAllElements?.('o') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
   const artifacts = (entitiesEl?.findAllElements?.('a') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
   const places = (entitiesEl?.findAllElements?.('pl') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
   const times = (entitiesEl?.findAllElements?.('t') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
-  return { persons, orgs, artifacts, places, times };
+  const others = (entitiesEl?.findAllElements?.('ot') || []).map((t: any) => t.getTextContent().trim()).filter(Boolean);
+  return { persons, orgs, artifacts, places, times, others };
 }
 
 export function parseExtras(root: any): { omissions: string[]; text: string } {
@@ -38,4 +39,3 @@ export function parseExtras(root: any): { omissions: string[]; text: string } {
   const text = extrasEl ? collectText(extrasEl).trim() : '';
   return { omissions, text };
 }
-

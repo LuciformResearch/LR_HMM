@@ -263,6 +263,9 @@ async function summarizeText(
       logFile: engine.logFile,
       debugPrompt: engine.debugPrompt,
       promptOutFile: engine.promptOutFile,
+      // logging context passthrough
+      timeZone: engine.timeZone || 'Europe/Paris',
+      logStartMs: engine.logStartMs,
     });
     let xml = res.xml || '';
     if ((!xml || !xml.includes(`<${rootTag}`)) && engine.allowHeuristicFallback) {
@@ -414,7 +417,7 @@ export async function summarizeBatched(
     if (engine.log && engine.logFile) {
       const { appendFile } = await import('fs/promises');
       const ts = new Date(startMs).toLocaleString('fr-FR', { timeZone: tz, hour12: false });
-      await appendFile(engine.logFile, `[${ts}] [unified] batched start total=${(input as any[]).length} filtered=${workset.length} chunkSize=${chunkSize} delay=${delay}\n`);
+      await appendFile(engine.logFile, `[${ts}] [unified] batched start total=${(input as any[]).length} filtered=${workset.length} chunkSize=${chunkSize} reqConcurrency=${opts.concurrency} delay=${delay}\n`);
     }
   } catch {}
   const results: LSummary[] = [];

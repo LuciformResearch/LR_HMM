@@ -103,7 +103,7 @@ async function main() {
     enforceAbsoluteRange: !ratioOnly
   };
 
-  const concurrency = Math.max(1, Number(getArg(args, '--concurrency', '3')));
+  const concurrency = Math.max(1, Number(getArg(args, '--concurrency', '20')));
   const batchDelayMs = Number(getArg(args, '--batch-delay-ms', '0'));
   const groupSize = Math.max(2, Number(getArg(args, '--group-size', '5')));
   const fromL1 = getArg(args, '--from-l1');

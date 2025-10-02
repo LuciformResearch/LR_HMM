@@ -287,7 +287,7 @@ export async function summarizeSummaryGroups(
   policies: LengthPolicies,
   opts: SummarizeExecOptions
 ): Promise<LSummary[]> {
-  const mode: XmlMode = 'l2';
+  // Compute dynamic root tag for higher levels (l2..lk)
   const concurrency = Math.max(1, opts.concurrency || 3);
   const useStructured = opts.directOutput ? false : true;
 
@@ -301,7 +301,8 @@ export async function summarizeSummaryGroups(
 
     const call = async (minChars: number, maxChars: number) => {
       const docs = toDocs(g);
-      const res = await generateStructuredXML(mode, docs, {
+      const rootTag = `l${Math.max(2, opts.level || 2)}`;
+      const res = await generateStructuredXML(rootTag, docs, {
         useVertex: engine.useVertex,
         project: engine.project,
         location: engine.location,
@@ -327,9 +328,9 @@ export async function summarizeSummaryGroups(
         includeExtras: engine.generateExtras !== false,
       });
       let xml = res.xml || '';
-      if ((!xml || !xml.includes(`<${mode}`)) && engine.allowHeuristicFallback) {
+      if ((!xml || !xml.includes('<l')) && engine.allowHeuristicFallback) {
         const fallback = firstSentences(docs, plan.max);
-        xml = `<l2><summary><![CDATA[${fallback}]]></summary><tags></tags><entities></entities>${(engine as any).generateSignals===false? '' : '\n  <signals><![CDATA[{}]]></signals>'}\n</l2>`;
+        xml = `<${rootTag}><summary><![CDATA[${fallback}]]></summary><tags></tags><entities></entities>${engine.generateSignals===false? '' : '\n  <signals><![CDATA[{}]]></signals>'}${engine.generateExtras===false? '' : '\n  <extras></extras>'}\n</${rootTag}>`;
       }
       return xml;
     };

@@ -41,6 +41,8 @@ async function main() {
     : path.resolve(process.cwd(), 'artefacts/HMM/parsed', `${slug}.json`);
   const outDir = path.resolve(process.cwd(), 'artefacts/HMM/compressed');
   await fs.mkdir(outDir, { recursive: true });
+  const logsDir = path.resolve(process.cwd(), 'artefacts/logs');
+  await fs.mkdir(logsDir, { recursive: true });
 
   // Windowing / prep
   const windowChars = Number(getArg(args, '--window-chars', '4000'));
@@ -71,7 +73,8 @@ async function main() {
   const retryBaseMs = Number(getArg(args, '--engine-retry-base-ms', '500'));
   const retryJitterMs = Number(getArg(args, '--engine-retry-jitter-ms', '250'));
   const wantLog = (getArg(args, '--log', 'true') || 'true').toLowerCase() === 'true';
-  const logFile = getArg(args, '--log-file', path.join(outDir, `${slug}.run.log`))!;
+  const defaultLogName = `${slug}.${new Date().toISOString().replace(/[:]/g,'_')}.run.log`;
+  const logFile = getArg(args, '--log-file', path.join(logsDir, defaultLogName))!;
 
   // Length policies
   const minSummary = Number(getArg(args, '--min-summary', '250'));

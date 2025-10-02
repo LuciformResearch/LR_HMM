@@ -51,3 +51,4 @@ Files Modified This Session
 New Scripts
 - `scripts/compress_memoryv2.ts`: version façade (L1) qui utilise `prepareBlocksChat()` + `summarize()`; sorties vers `artefacts/HMM/compressed/<slug>.l1.v2.json`.
   - Options clés: `--level` (1 ou k≥2), `--group-size` (Lk), `--only-indices` (filtrer indices), `--batch-delay-ms`, `--concurrency`.
+  - Logging: `--log` et `--log-file` (défaut: `artefacts/logs/<slug>.<timestamp>.run.log`).

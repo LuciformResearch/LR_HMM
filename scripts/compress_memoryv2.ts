@@ -87,13 +87,15 @@ async function main() {
   const underflowMode = (getArg(args, '--short-mode', 'regenerate') || 'regenerate') as any; // accept|regenerate|error
   const overflowMode = (getArg(args, '--overflow-mode', 'regenerate') || 'regenerate') as any; // accept|regenerate|error
   const regenerateRatioStep = Number(getArg(args, '--ratio-step', '0.1'));
+  const ratioOnly = (getArg(args, '--ratio-only', 'false') || 'false').toLowerCase() === 'true';
   const policies: LengthPolicies = {
     compressionLevel,
     wiggle,
-    underflowMode,
-    overflowMode,
+    underflowMode: ratioOnly ? 'accept' : underflowMode,
+    overflowMode: ratioOnly ? 'accept' : overflowMode,
     regenerateRatioStep,
-    summaryLenRange: [minSummary, maxSummary]
+    summaryLenRange: [minSummary, maxSummary],
+    enforceAbsoluteRange: !ratioOnly
   };
 
   const concurrency = Math.max(1, Number(getArg(args, '--concurrency', '3')));
@@ -182,7 +184,7 @@ async function main() {
       windowChars, ensureAssistant, maxBlocks,
       persona: { profile, personaName, interlocutor, roleMap },
       engine: { useVertex, project, location, model, callTimeoutMs, maxOutputTokens, allowHeuristicFallback, paceDelayMs, retryAttempts, retryBaseMs, retryJitterMs, generateSignals, generateExtras },
-      policies: { minSummary, maxSummary, compressionLevel, wiggle, underflowMode, overflowMode, regenerateRatioStep },
+      policies: { minSummary, maxSummary, compressionLevel, wiggle, underflowMode: policies.underflowMode, overflowMode: policies.overflowMode, enforceAbsoluteRange: policies.enforceAbsoluteRange, regenerateRatioStep },
       batching: { concurrency, batchDelayMs },
       paths: { parsedPath, outDir, logFile }
     };

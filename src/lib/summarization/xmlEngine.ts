@@ -30,6 +30,9 @@ export type XmlEngineOpts = {
   retryJitterMs?: number;        // added random jitter (default 250ms)
   includeSignals?: boolean;      // include <signals> section (default true)
   includeExtras?: boolean;       // include <extras> section (default true)
+  // Logging
+  log?: boolean;
+  logFile?: string;
 };
 
 /**
@@ -40,6 +43,14 @@ export async function generateStructuredXML(
   documents: string,
   opts: XmlEngineOpts
 ): Promise<{ xml: string; strategy: 'primary' | 'retry' | 'none'; }> {
+  async function log(msg: string) {
+    try {
+      if (!opts.log || !opts.logFile) return;
+      const line = `[${new Date().toISOString()}] [xmlEngine] ${msg}\n`;
+      const { appendFile } = await import('fs/promises');
+      await appendFile(opts.logFile, line);
+    } catch {}
+  }
   const nonVertexApiKey = process.env.GEMINI_API_KEY || process.env.GOOGLE_API_KEY || process.env.GOOGLE_GENAI_API_KEY;
   const ai = new GoogleGenAI(
     opts.useVertex
@@ -58,6 +69,8 @@ export async function generateStructuredXML(
   const extrasBlock = wantExtras ? `\n  <extras>\n    <omission>...</omission>\n  </extras>` : '';
   const fullSchema = `<${xmlRoot} minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <orgs><o>...</o></orgs>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>${signalsBlock}${extrasBlock}\n</${xmlRoot}>`;
   const schema = opts.directOutput ? minimalSchema : fullSchema;
+
+  await log(`start model=${opts.model} vertex=${!!opts.useVertex} root=${xmlRoot} direct=${!!opts.directOutput} min=${opts.minChars} max=${opts.maxChars} hintTarget=${opts.hintTarget} hintCap=${opts.hintCap} includeSignals=${opts.includeSignals!==false} includeExtras=${opts.includeExtras!==false}`);
 
   // Persona/prompt preamble
   const profile = opts.profile || 'chat_assistant_fp';
@@ -97,19 +110,23 @@ export async function generateStructuredXML(
     const ctrl = new AbortController();
     const t = setTimeout(() => ctrl.abort(), opts.callTimeoutMs);
     try {
+      await log(`attempt ${i+1}/${retryAttempts} maxTokens=${a.maxOutputTokens} temp=${a.temperature} timeoutMs=${opts.callTimeoutMs}`);
       const resp: any = await ai.models.generateContent({
         model: a.model,
         contents: prompt,
         generationConfig: { maxOutputTokens: a.maxOutputTokens, temperature: a.temperature }
       } as any);
       const out = (resp?.text || resp?.response?.text || '').trim();
+      await log(`attempt ${i+1} responseLen=${out.length} hasRoot=${out.includes(`<${xmlRoot}`)}`);
       if (out.includes(`<${xmlRoot}`)) return { xml: out, strategy: i === 0 ? 'primary' : 'retry' };
     } finally { clearTimeout(t); }
     // backoff before next attempt
     if (i + 1 < retryAttempts) {
       const wait = baseMs * Math.pow(2, i) + Math.floor(Math.random() * (jitterMs + 1));
+      await log(`backoff waitMs=${wait}`);
       await new Promise(r => setTimeout(r, wait));
     }
   }
+  await log(`end strategy=none`);
   return { xml: '', strategy: 'none' };
 }

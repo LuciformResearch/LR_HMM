@@ -61,46 +61,31 @@ export async function generateStructuredXML(
       : (nonVertexApiKey ? ({ apiKey: nonVertexApiKey } as any) : ({} as any))
   );
 
-  const soft = opts.hintTarget ? `Objectif longueur: ${opts.hintTarget} caractères (cible douce).` : '';
+  const soft = opts.hintTarget ? `Objectif longueur: ${Math.round(opts.hintTarget)} caractères (cible douce).` : '';
   const cap = opts.hintCap ? `Ne JAMAIS dépasser ${opts.hintCap} caractères (cap dur).` : '';
 
   const xmlRoot = mode && /^l\d+$/i.test(mode) ? mode : 'l1';
-  const minimalSchema = `<${xmlRoot} minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...]]></summary>\n</${xmlRoot}>`;
+  const targetLenAttr = Math.max(0, Math.round(opts.hintTarget || Math.max(0, Math.floor((opts.minChars + opts.maxChars) / 2))))
+  const minimalSchema = `<${xmlRoot} minChars=\"${Math.max(0, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary targetLen=\"${targetLenAttr}\"><![CDATA[...]]></summary>\n</${xmlRoot}>`;
   const wantSignals = (opts as any).includeSignals !== false; // default true
   const wantExtras = (opts as any).includeExtras !== false;   // default true
   const signalsBlock = wantSignals ? `\n  <signals><![CDATA[{\\"themes\\":[...],\\"timeline\\":[{\\"t\\":\\"00:12\\",\\"event\\":\\"...\\"}]}]]></signals>` : '';
   const extrasBlock = wantExtras ? `\n  <extras>\n    <omission>...</omission>\n  </extras>` : '';
-  const fullSchema = `<${xmlRoot} minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <orgs><o>...</o></orgs>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>${signalsBlock}${extrasBlock}\n</${xmlRoot}>`;
+  const fullSchema = `<${xmlRoot} minChars=\"${Math.max(0, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary targetLen=\"${targetLenAttr}\"><![CDATA[...${opts.hintTarget ? Math.round(opts.hintTarget) : `${opts.minChars}-${opts.maxChars}`} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <orgs><o>...</o></orgs>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n    <other><ot>...</ot></other>\n  </entities>${signalsBlock}${extrasBlock}\n</${xmlRoot}>`;
   const schema = opts.directOutput ? minimalSchema : fullSchema;
 
   await log(`start model=${opts.model} vertex=${!!opts.useVertex} root=${xmlRoot} direct=${!!opts.directOutput} min=${opts.minChars} max=${opts.maxChars} hintTarget=${opts.hintTarget} hintCap=${opts.hintCap} includeSignals=${opts.includeSignals!==false} includeExtras=${opts.includeExtras!==false}`);
 
-  // Persona/prompt preamble
+  // Persona/prompt preamble (condensed Role/Situation/Summary rules)
   const profile = opts.profile || 'chat_assistant_fp';
   const persona = opts.personaName || (profile === 'org_voice_fp' ? 'LuciformResearch' : 'ShadeOS');
-  const interlocutorName = Array.from(new Set((opts.allowedNames || []).filter(Boolean))).find(n => n && n !== persona) || "l'utilisateur";
-  const addressing = opts.addressing || (profile === 'neutral_reporter' ? 'third_person' : 'first_person');
-  const allow2p = opts.allowSecondPerson === true ? true : false;
-  const namingPolicy = opts.namingPolicy || 'allow_from_input_only';
   const names = Array.from(new Set((opts.allowedNames || []).filter(Boolean)));
-  const namingLine = namingPolicy === 'forbid_invention'
-    ? (names.length ? `N'utilise QUE ces noms: ${names.join(', ')}. N'en invente aucun autre.` : `N'utilise aucun nom propre si absent des Documents.`)
-    : namingPolicy === 'allow_from_input_only'
-      ? (names.length ? `N'utilise que des noms présents dans les Documents (p.ex. ${names.join(', ')}). N'en invente pas.` : `N'utilise que des noms présents dans les Documents; n'en invente pas.`)
-      : `Tu peux utiliser des noms si le contexte l'exige.`;
-  const addressLine = addressing === 'first_person'
-    ? `Tu impersonnes ${persona} et écris à la première personne (${persona === 'LuciformResearch' ? 'nous' : 'je'}). ${allow2p ? '' : 'N’adresse pas de message directement à la deuxième personne.'}`
-    : `Tu écris à la troisième personne, style rapport (ne pas s'adresser au lecteur).`;
-  const styleHint = profile === 'chat_assistant_fp'
-    ? `Imite le style déjà présent dans les messages de ${persona} (ton, rythme, tournures).`
-    : profile === 'org_voice_fp'
-      ? `Style interne d'organisation, clair et factuel.`
-      : `Style neutre, clair et concis.`;
-
-  const narrativeHint = mode === 'l1' && addressing === 'first_person'
-    ? `Pour la section <summary> UNIQUEMENT: écris à la première personne ("je"), comme si TU étais l'assistant se remémorant sa conversation avec ${interlocutorName}. Raconte le déroulé (ce qui a été demandé, ce que j'ai expliqué ensuite) avec transitions naturelles. Ne t'adresse pas en "tu/vous". Conserve les noms EXACTEMENT tels qu'ils apparaissent dans les Documents (ne remplace pas le nom de l'assistant).`
-    : '';
-  const prompt = `Rôle: ${persona}\n${addressLine}\n${styleHint}\n${namingLine}\n${soft} ${cap}\n${narrativeHint}\nProduis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):\n\n${schema}\n\nDocuments:\n${documents}`;
+  const interlocutorName = names.find(n => n && n !== persona) || "l'utilisateur";
+  const docType = profile === 'email_recipient_fp' ? 'email' : (String(profile).includes('chat') ? 'transcript de chat' : 'document');
+  const roleLine = `Rôle: ${persona}, Agent d'Introspection Mémoire Long Terme`;
+  const situationLine = `Situation: Résumé introspectif d’un document de type ${docType}`;
+  const summaryRules = `Dans <summary>, écris à la 1ʳᵉ personne, introspectif, factuel, fidèle au ton de ${persona}, sans "tu/vous" (sauf en citations), sans invention ni variantes de noms. Ne remplace pas le nom de l'assistant. Conversation avec ${interlocutorName}.`;
+  const prompt = `${roleLine}\n${situationLine}\n${summaryRules}\n${soft} ${cap}\nProduis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):\n\n${schema}\n\nDocuments:\n${documents}`;
 
   // Debug-prompt mode: write prompt and return immediately
   if (opts.debugPrompt) {

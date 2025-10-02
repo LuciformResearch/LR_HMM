@@ -22,6 +22,7 @@ Current Status (end of session)
 - API unifiée L1/Lk opérationnelle; helper `summarizeText(...)` câblé; facades `summarize(..)`/`summarizeBatched(..)`.
 - Ratio-only: objectif longueur appliqué à `<summary>` uniquement; cap dur omis; tokens dynamiques.
 - Logging riche + debug-prompts.
+- Traçabilité: chaque `LSummary` inclut maintenant `index` (position dans `summaries[]`) pour faciliter les régénérations ciblées.
 
 Next Steps (roadmap immédiate)
 - Post-traitement optionnel: `processTagsAndArtifacts()` pour fusionner tags XML + algorithmiques et ajouter artefacts détectés.
@@ -51,6 +52,8 @@ Notes
 - `generateSignals` et `generateExtras` ajustent la structure indépendamment du niveau.
 - Debug-prompt: `--debug-prompt true` + `--prompt-file` écrit le prompt exact (et n’appelle pas l’API) dans `artefacts/prompts/...`.
 - Logging détaillé dans `artefacts/logs/...` (tentatives, backoff, hasRoot, plans).
+- Timestamps & durée: logs horodatés en CET, avec `+Xs` (since start) et progression par lot (`batch i/n done items=x/y`).
+- Remarques temporelles: des pauses perçues peuvent refléter la latence Vertex/planification des lots; se référer aux marqueurs `+Xs` et aux lignes de progression pour valider l’avancement.
 
 Files Modified This Session
 - src/lib/hmm/unified.ts, src/lib/summarization/xmlEngine.ts, src/lib/hmm/xmlHelpers.ts, README.md, REGENERATE_CONTEXT.md.
@@ -60,3 +63,8 @@ New Scripts
   - Options clés: `--level` (1 ou k≥2), `--group-size` (Lk), `--only-indices` (filtrer indices), `--batch-delay-ms`, `--concurrency`.
   - Logging: `--log` et `--log-file` (défaut: `artefacts/logs/<slug>.<timestamp>.run.log`).
   - Debugging prompts: `--debug-prompt true` et `--prompt-file` (défaut: `artefacts/prompts/<slug>.<timestamp>.prompts.txt`). En mode debug, le moteur écrit les prompts et n'appelle pas l'API.
+- `scripts/patch_l1_add_index.ts`: patch utilitaire pour ajouter `index` aux éléments de `summaries[]` d’un JSON L1 existant (sans relancer Vertex).
+  - Usage:
+    - In-place: `npx tsx scripts/patch_l1_add_index.ts --slug <slug> --in-place true`
+    - Fichier arbitraire: `npx tsx scripts/patch_l1_add_index.ts --in artefacts/HMM/compressed/<slug>.l1.json --out artefacts/HMM/compressed/<slug>.l1.patched.json`
+    - Dry-run: `--dry-run true` (rapporte combien d’indices seraient ajoutés)

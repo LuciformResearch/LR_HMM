@@ -13,6 +13,7 @@ export type RawDataBlock = {
 
 export type LSummary = {
   level: number; // 1..k
+  index?: number; // position in summaries[] for this level
   covers?: number[]; // source item indices or nested coverage
   sourceChars: number; // chars in input (block/group)
   summary: string;
@@ -332,9 +333,9 @@ export async function summarizeBlocks(
   opts: SummarizeExecOptions
 ): Promise<LSummary[]> {
   const concurrency = Math.max(1, opts.concurrency || 3);
-  return runPool(blocks, async (b) => {
+  return runPool(blocks, async (b, i) => {
     const sourceChars = ensureCharCount(b.charCount, b.text);
-    return summarizeText(
+    const res = await summarizeText(
       b.text,
       sourceChars,
       b.covers,
@@ -343,6 +344,7 @@ export async function summarizeBlocks(
       policies,
       { structured: !(opts.directOutput === true) }
     );
+    return { ...res, index: i };
   }, concurrency);
 }
 
@@ -357,12 +359,12 @@ export async function summarizeSummaryGroups(
     return g.map((s, i) => `---\n[Item #${i + 1} | ${s.summaryChars} chars]\n${s.summary}`).join('\n');
   }
 
-  return runPool(groups, async (g) => {
+  return runPool(groups, async (g, gi) => {
     const totalChars = g.reduce((a, x) => a + (x.summaryChars || 0), 0);
     const docs = toDocs(g);
     const covers = g.flatMap(x => x.covers || []);
     const level = Math.max(2, opts.level || 2);
-    return summarizeText(
+    const res = await summarizeText(
       docs,
       totalChars,
       covers,
@@ -371,6 +373,7 @@ export async function summarizeSummaryGroups(
       policies,
       { structured: !(opts.directOutput === true) }
     );
+    return { ...res, index: gi };
   }, concurrency);
 }
 

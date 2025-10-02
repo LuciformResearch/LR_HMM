@@ -207,7 +207,7 @@ async function main() {
       underflowMode, overflowMode,
       generateSignals, generateExtras,
     },
-    promptHint: prepared.promptHint,
+    promptHint,
     summaries: results,
   };
 

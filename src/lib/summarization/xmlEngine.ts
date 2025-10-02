@@ -61,8 +61,8 @@ export async function generateStructuredXML(
       : (nonVertexApiKey ? ({ apiKey: nonVertexApiKey } as any) : ({} as any))
   );
 
-  const soft = opts.hintTarget ? `Objectif longueur: ${Math.round(opts.hintTarget)} caractères (cible douce).` : '';
-  const cap = opts.hintCap ? `Ne JAMAIS dépasser ${opts.hintCap} caractères (cap dur).` : '';
+  const soft = opts.hintTarget ? `Pour la section <summary> UNIQUEMENT: objectif ${Math.round(opts.hintTarget)} caractères (cible douce).` : '';
+  const cap = opts.hintCap ? `Pour <summary> UNIQUEMENT: ne JAMAIS dépasser ${opts.hintCap} caractères (cap dur).` : '';
 
   const xmlRoot = mode && /^l\d+$/i.test(mode) ? mode : 'l1';
   const targetLenAttr = Math.max(0, Math.round(opts.hintTarget || Math.max(0, Math.floor((opts.minChars + opts.maxChars) / 2))))
@@ -85,7 +85,7 @@ export async function generateStructuredXML(
   const docType = profile === 'email_recipient_fp' ? 'email' : (String(profile).includes('chat') ? 'transcript de chat' : 'document');
   const roleLine = `Rôle: ${persona}, Agent d'Introspection Mémoire Long Terme`;
   const situationLine = `Situation: Résumé introspectif d’un document de type ${docType}. (Conversation avec ${interlocutorsHint})`;
-  const summaryRules = `Dans <summary>, écris à la 1ʳᵉ personne, introspectif, factuel, fidèle au ton de ${persona}, sans "tu/vous" (sauf en citations), sans invention ni variantes de noms. Ne remplace pas le nom de l'assistant.`;
+  const summaryRules = `Dans <summary>, écris à la 1ʳᵉ personne, introspectif, factuel, fidèle au ton de ${persona}, sans "tu/vous" (sauf en citations), sans invention ni variantes de noms.`;
   const prompt = `${roleLine}\n${situationLine}\n${summaryRules}\n${soft} ${cap}\nProduis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):\n\n${schema}\n\nDocuments:\n${documents}`;
 
   // Debug-prompt mode: write prompt and return immediately

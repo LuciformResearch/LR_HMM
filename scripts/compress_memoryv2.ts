@@ -173,6 +173,24 @@ async function main() {
     log: wantLog, logFile,
   } as any;
 
+  // Optional run header logging
+  if (wantLog && logFile) {
+    const header = {
+      ts: new Date().toISOString(),
+      kind: 'run-header',
+      slug, level, onlyIndices, groupSize,
+      windowChars, ensureAssistant, maxBlocks,
+      persona: { profile, personaName, interlocutor, roleMap },
+      engine: { useVertex, project, location, model, callTimeoutMs, maxOutputTokens, allowHeuristicFallback, paceDelayMs, retryAttempts, retryBaseMs, retryJitterMs, generateSignals, generateExtras },
+      policies: { minSummary, maxSummary, compressionLevel, wiggle, underflowMode, overflowMode, regenerateRatioStep },
+      batching: { concurrency, batchDelayMs },
+      paths: { parsedPath, outDir, logFile }
+    };
+    try {
+      await fs.appendFile(logFile, `[${header.ts}] [script] runHeader ${JSON.stringify(header)}\n`, 'utf8');
+    } catch {}
+  }
+
   // Summarize via library batched façade
   const results: LSummary[] = level === 1
     ? await summarizeBatched(l1Blocks, engine, policies, { concurrency, batchDelayMs, directOutput: false, onlyIndices })

@@ -95,6 +95,16 @@ async function main() {
   const batchDelayMs = Number(getArg(args, '--batch-delay-ms', '0'));
   const groupSize = Math.max(2, Number(getArg(args, '--group-size', '5')));
   const fromL1 = getArg(args, '--from-l1');
+  const onlyIndicesArg = getArg(args, '--only-indices');
+  const onlyIndices = onlyIndicesArg ? (() => {
+    const out: number[] = [];
+    for (const part of (onlyIndicesArg || '').split(',').map(s => s.trim()).filter(Boolean)) {
+      const m = part.match(/^(\d+)-(\d+)$/);
+      if (m) { const a = Number(m[1]); const b = Number(m[2]); if (!Number.isNaN(a) && !Number.isNaN(b)) { const lo = Math.min(a, b), hi = Math.max(a, b); for (let i = lo; i <= hi; i++) out.push(i); } }
+      else { const v = Number(part); if (!Number.isNaN(v)) out.push(v); }
+    }
+    return Array.from(new Set(out)).sort((a,b)=>a-b);
+  })() : undefined;
 
   // Read parsed conversation
   const raw = await fs.readFile(parsedPath, 'utf8');
@@ -159,8 +169,8 @@ async function main() {
 
   // Summarize via library batched façade
   const results: LSummary[] = level === 1
-    ? await summarizeBatched(l1Blocks, engine, policies, { concurrency, batchDelayMs, directOutput: false })
-    : await summarizeBatched(lGroups, engine, policies, { concurrency, batchDelayMs, directOutput: false, level });
+    ? await summarizeBatched(l1Blocks, engine, policies, { concurrency, batchDelayMs, directOutput: false, onlyIndices })
+    : await summarizeBatched(lGroups, engine, policies, { concurrency, batchDelayMs, directOutput: false, level, onlyIndices });
 
   const out = {
     slug,

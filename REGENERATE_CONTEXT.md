@@ -23,6 +23,7 @@ Current Status (end of session)
 Next Steps (roadmap immédiate)
 - Post-traitement optionnel: `processTagsAndArtifacts()` pour fusionner tags XML + algorithmiques et ajouter artefacts détectés.
 - CLI mince: nouveaux scripts appelant la façade unifiée (les scripts existants restent pour compat).
+  - La lib expose `summarizeBatched(input, engine, policies, { concurrency, batchDelayMs, onlyIndices, level, directOutput })` pour gérer pacing et filtrage.
 
 How To Run (current scripts)
 - `.env.local` (git-ignored) requis:
@@ -49,3 +50,4 @@ Files Modified This Session
 
 New Scripts
 - `scripts/compress_memoryv2.ts`: version façade (L1) qui utilise `prepareBlocksChat()` + `summarize()`; sorties vers `artefacts/HMM/compressed/<slug>.l1.v2.json`.
+  - Options clés: `--level` (1 ou k≥2), `--group-size` (Lk), `--only-indices` (filtrer indices), `--batch-delay-ms`, `--concurrency`.

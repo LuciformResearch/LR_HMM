@@ -80,11 +80,12 @@ export async function generateStructuredXML(
   const profile = opts.profile || 'chat_assistant_fp';
   const persona = opts.personaName || (profile === 'org_voice_fp' ? 'LuciformResearch' : 'ShadeOS');
   const names = Array.from(new Set((opts.allowedNames || []).filter(Boolean)));
-  const interlocutorName = names.find(n => n && n !== persona) || "l'utilisateur";
+  const otherNames = names.filter(n => n && n !== persona);
+  const interlocutorsHint = otherNames.length ? otherNames.join(', ') : "l'utilisateur";
   const docType = profile === 'email_recipient_fp' ? 'email' : (String(profile).includes('chat') ? 'transcript de chat' : 'document');
   const roleLine = `Rôle: ${persona}, Agent d'Introspection Mémoire Long Terme`;
-  const situationLine = `Situation: Résumé introspectif d’un document de type ${docType}`;
-  const summaryRules = `Dans <summary>, écris à la 1ʳᵉ personne, introspectif, factuel, fidèle au ton de ${persona}, sans "tu/vous" (sauf en citations), sans invention ni variantes de noms. Ne remplace pas le nom de l'assistant. Conversation avec ${interlocutorName}.`;
+  const situationLine = `Situation: Résumé introspectif d’un document de type ${docType}. (Conversation avec ${interlocutorsHint})`;
+  const summaryRules = `Dans <summary>, écris à la 1ʳᵉ personne, introspectif, factuel, fidèle au ton de ${persona}, sans "tu/vous" (sauf en citations), sans invention ni variantes de noms. Ne remplace pas le nom de l'assistant.`;
   const prompt = `${roleLine}\n${situationLine}\n${summaryRules}\n${soft} ${cap}\nProduis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):\n\n${schema}\n\nDocuments:\n${documents}`;
 
   // Debug-prompt mode: write prompt and return immediately

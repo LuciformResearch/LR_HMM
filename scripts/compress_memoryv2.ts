@@ -153,6 +153,10 @@ async function main() {
     if (Number.isFinite(maxBlocks) && (maxBlocks as number) < l1Blocks.length) {
       l1Blocks = l1Blocks.slice(0, maxBlocks as number);
     }
+    // In debug-prompt mode, only generate a single prompt to avoid overwriting
+    if (debugPrompt && l1Blocks.length > 1) {
+      l1Blocks = l1Blocks.slice(0, 1);
+    }
   } else {
     const defaultL1Path = path.join(outDir, `${slug}.l1.v2.json`);
     const l1Path = fromL1 ? path.resolve(process.cwd(), fromL1) : defaultL1Path;
@@ -162,6 +166,9 @@ async function main() {
     // Group into fixed-size arrays
     for (let i = 0; i < l1.length; i += groupSize) {
       lGroups.push(l1.slice(i, Math.min(i + groupSize, l1.length)));
+    }
+    if (debugPrompt && lGroups.length > 1) {
+      lGroups = lGroups.slice(0, 1);
     }
   }
 

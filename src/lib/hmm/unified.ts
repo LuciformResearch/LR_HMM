@@ -66,6 +66,7 @@ export type LengthPolicies = {
   overflowMode: 'accept' | 'regenerate' | 'error';
   regenerateRatioStep: number; // step to adjust compressionLevel on retry, e.g. 0.1
   summaryLenRange?: [number, number]; // absolute [min,max] hard caps if provided
+  enforceAbsoluteRange?: boolean; // if false, ignore summaryLenRange hard clamping (ratio-only)
 };
 
 export type LengthPlan = {
@@ -90,7 +91,7 @@ export function computeLengthPlan(totalChars: number, p: LengthPolicies): Length
   let min = Math.max(50, Math.floor(tgt * (1 - wiggle)));
   let max = Math.max(min + 50, Math.floor(tgt * (1 + wiggle)));
   // Apply absolute range if provided
-  if (p.summaryLenRange) {
+  if (p.summaryLenRange && p.enforceAbsoluteRange !== false) {
     const [rminRaw, rmaxRaw] = p.summaryLenRange;
     const rmin = isFinite(rminRaw as number) ? Math.max(50, Math.floor(rminRaw as number)) : undefined;
     const rmax = isFinite(rmaxRaw as number) && (rmaxRaw as number) > 0 ? Math.floor(rmaxRaw as number) : undefined;
@@ -225,6 +226,7 @@ async function summarizeText(
   let plan = computeLengthPlan(sourceChars, policies);
   await log(`summarizeText start level=${level} root=${rootTag} sourceChars=${sourceChars} plan[min=${plan.min},max=${plan.max},target=${plan.hintTarget}] structured=${useStructured}`);
 
+  const ratioOnly = policies.enforceAbsoluteRange === false;
   const call = async (minChars: number, maxChars: number) => {
     const res = await generateStructuredXML(rootTag, docs, {
       useVertex: engine.useVertex,
@@ -236,7 +238,7 @@ async function summarizeText(
       minChars,
       maxChars,
       hintTarget: plan.hintTarget,
-      hintCap: plan.hintCap,
+      hintCap: ratioOnly ? undefined : plan.hintCap,
       profile: engine.profile,
       personaName: engine.personaName,
       addressing: engine.addressing,
@@ -265,7 +267,10 @@ async function summarizeText(
   };
 
   // First attempt
-  let xml = await call(plan.min, plan.max);
+  // In ratio-only mode, do not enforce tight bounds: allow a wide container but avoid infinity
+  const minForCall = ratioOnly ? 0 : plan.min;
+  const maxForCall = ratioOnly ? Math.max(256, Math.ceil(plan.hintTarget * 2)) : plan.max;
+  let xml = await call(minForCall, maxForCall);
   const parsed0 = new LuciformXMLParser(xml, { mode: 'luciform-permissive', maxTextLength: 300000 }).parse();
   const r0: any = parsed0.document?.root;
   if (!r0) throw new Error('XML parse failed');
@@ -275,7 +280,7 @@ async function summarizeText(
   await log(`first summary len=${produced} decision=${decision.decision}${decision.newCompressionLevel!=null?` nextCompression=${decision.newCompressionLevel}`:''}`);
 
   // Optional regenerate with adjusted compressionLevel
-  if (decision.decision === 'regenerate' && typeof decision.newCompressionLevel === 'number') {
+  if (decision.decision === 'regenerate' && typeof decision.newCompressionLevel === 'number' && !ratioOnly) {
     const newPolicies: LengthPolicies = { ...policies, compressionLevel: decision.newCompressionLevel };
     plan = computeLengthPlan(sourceChars, newPolicies);
     xml = await call(plan.min, plan.max);

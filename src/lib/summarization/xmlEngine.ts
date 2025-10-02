@@ -75,6 +75,7 @@ export async function generateStructuredXML(
   // Persona/prompt preamble
   const profile = opts.profile || 'chat_assistant_fp';
   const persona = opts.personaName || (profile === 'org_voice_fp' ? 'LuciformResearch' : 'ShadeOS');
+  const interlocutorName = Array.from(new Set((opts.allowedNames || []).filter(Boolean))).find(n => n && n !== persona) || "l'utilisateur";
   const addressing = opts.addressing || (profile === 'neutral_reporter' ? 'third_person' : 'first_person');
   const allow2p = opts.allowSecondPerson === true ? true : false;
   const namingPolicy = opts.namingPolicy || 'allow_from_input_only';
@@ -94,7 +95,7 @@ export async function generateStructuredXML(
       : `Style neutre, clair et concis.`;
 
   const narrativeHint = mode === 'l1' && addressing === 'first_person'
-    ? `Style narratif de conversation: raconte le déroulé des échanges en "je" en mentionnant l'interlocuteur par son prénom tel qu'il apparaît dans les Documents (ex.: "Lucie a dit...", "je lui ai répondu..."). Décris l'alternance des tours (ce qui a été demandé, ce que j'ai expliqué ensuite), avec des transitions naturelles. Pas de listes à puces, pas d'adresses en "tu/vous".`
+    ? `Pour la section <summary> UNIQUEMENT: écris à la première personne ("je"), comme si TU étais l'assistant se remémorant sa conversation avec ${interlocutorName}. Raconte le déroulé (ce qui a été demandé, ce que j'ai expliqué ensuite) avec transitions naturelles. Ne t'adresse pas en "tu/vous". Conserve les noms EXACTEMENT tels qu'ils apparaissent dans les Documents (ne remplace pas le nom de l'assistant).`
     : '';
   const prompt = `Rôle: ${persona}\n${addressLine}\n${styleHint}\n${namingLine}\n${soft} ${cap}\n${narrativeHint}\nProduis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):\n\n${schema}\n\nDocuments:\n${documents}`;
 

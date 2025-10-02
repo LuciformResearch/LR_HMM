@@ -84,27 +84,23 @@ function clamp(v: number, lo: number, hi: number) {
 
 // Compute min/max/targets from unified length policies
 export function computeLengthPlan(totalChars: number, p: LengthPolicies): LengthPlan {
-  const lvl = clamp(isFinite(p.compressionLevel) ? p.compressionLevel : 0.3, 0.05, 3.0);
-  const tgt = Math.max(50, Math.floor(totalChars * lvl));
+  const lvl = clamp(isFinite(p.compressionLevel) ? p.compressionLevel : 0.3, 0.01, 3.0);
+  const rawTarget = Math.max(0, Math.floor(totalChars * lvl));
   const wiggle = clamp(isFinite(p.wiggle) ? p.wiggle : 0.1, 0, 0.8);
-  // Base band from target and wiggle
-  let min = Math.max(50, Math.floor(tgt * (1 - wiggle)));
-  let max = Math.max(min + 50, Math.floor(tgt * (1 + wiggle)));
-  // Apply absolute range if provided
+  // Clamp target into absolute range (if enabled)
+  let target = rawTarget;
   if (p.summaryLenRange && p.enforceAbsoluteRange !== false) {
     const [rminRaw, rmaxRaw] = p.summaryLenRange;
-    const rmin = isFinite(rminRaw as number) ? Math.max(50, Math.floor(rminRaw as number)) : undefined;
+    const rmin = isFinite(rminRaw as number) ? Math.max(0, Math.floor(rminRaw as number)) : undefined;
     const rmax = isFinite(rmaxRaw as number) && (rmaxRaw as number) > 0 ? Math.floor(rmaxRaw as number) : undefined;
-    if (rmin != null) min = Math.max(min, rmin);
-    if (rmax != null) max = Math.min(max, rmax);
-    // If inconsistent, fall back to tight band [rmin,rmax]
-    if (rmin != null && rmax != null && min > max) {
-      min = Math.min(rmin, rmax);
-      max = Math.max(rmin, rmax);
-    }
+    const lo = rmin != null ? rmin : 0;
+    const hi = rmax != null ? rmax : Number.POSITIVE_INFINITY;
+    target = clamp(rawTarget, lo, isFinite(hi) ? hi : rawTarget);
   }
-  if (min > max) min = max; // final guard
-  const hintTarget = clamp(tgt, min, max);
+  // Band around (possibly clamped) target
+  let min = Math.max(0, Math.floor(target * (1 - wiggle)));
+  let max = Math.max(min + 1, Math.ceil(target * (1 + wiggle)));
+  const hintTarget = target;
   const hintCap = Math.max(min, max);
   return { totalChars, target: hintTarget, min, max, hintTarget, hintCap };
 }
@@ -121,12 +117,13 @@ export function evaluateLengthOutcome(
   plan: LengthPlan,
   policies: LengthPolicies
 ): LengthDecision {
-  const { min, max, target } = plan;
+  const { min, max, target, totalChars } = plan;
   if (producedLen >= min && producedLen <= max) {
-    return { decision: 'accept', message: `Within bounds: len=${producedLen} in [${min},${max}] (target=${target})` };
+    return { decision: 'accept', message: `Within wiggle: len=${producedLen} in [${min},${max}] (target=${target})` };
   }
   const under = producedLen < min;
   const over = producedLen > max;
+  const stepChars = Math.max(1, Math.floor((policies.regenerateRatioStep || 0.1) * Math.max(1, totalChars)));
   if (under) {
     if (policies.underflowMode === 'accept') {
       return { decision: 'accept', message: `Underflow accepted: len=${producedLen} < min=${min}` };
@@ -134,9 +131,9 @@ export function evaluateLengthOutcome(
     if (policies.underflowMode === 'error') {
       return { decision: 'reject', message: `Underflow error: len=${producedLen} < min=${min}` };
     }
-    const step = Math.max(0.01, policies.regenerateRatioStep || 0.1);
-    const next = (policies.compressionLevel || 0.3) + step;
-    return { decision: 'regenerate', newCompressionLevel: Number(next.toFixed(3)), message: `Underflow: increase compressionLevel by +${step}` };
+    const nextTarget = target + stepChars;
+    const nextRatio = Math.max(0.001, nextTarget / Math.max(1, totalChars));
+    return { decision: 'regenerate', newCompressionLevel: Number(nextRatio.toFixed(4)), message: `Underflow: increase target by +${stepChars} chars` };
   }
   if (over) {
     if (policies.overflowMode === 'accept') {
@@ -145,9 +142,9 @@ export function evaluateLengthOutcome(
     if (policies.overflowMode === 'error') {
       return { decision: 'reject', message: `Overflow error: len=${producedLen} > max=${max}` };
     }
-    const step = Math.max(0.01, policies.regenerateRatioStep || 0.1);
-    const next = (policies.compressionLevel || 0.3) - step;
-    return { decision: 'regenerate', newCompressionLevel: Number(next.toFixed(3)), message: `Overflow: decrease compressionLevel by -${step}` };
+    const nextTarget = Math.max(0, target - stepChars);
+    const nextRatio = Math.max(0.001, nextTarget / Math.max(1, totalChars));
+    return { decision: 'regenerate', newCompressionLevel: Number(nextRatio.toFixed(4)), message: `Overflow: decrease target by -${stepChars} chars` };
   }
   return { decision: 'accept', message: 'No action needed' };
 }
@@ -280,7 +277,7 @@ async function summarizeText(
   await log(`first summary len=${produced} decision=${decision.decision}${decision.newCompressionLevel!=null?` nextCompression=${decision.newCompressionLevel}`:''}`);
 
   // Optional regenerate with adjusted compressionLevel
-  if (decision.decision === 'regenerate' && typeof decision.newCompressionLevel === 'number' && !ratioOnly) {
+  if (decision.decision === 'regenerate' && typeof decision.newCompressionLevel === 'number') {
     const newPolicies: LengthPolicies = { ...policies, compressionLevel: decision.newCompressionLevel };
     plan = computeLengthPlan(sourceChars, newPolicies);
     xml = await call(plan.min, plan.max);

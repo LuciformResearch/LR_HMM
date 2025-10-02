@@ -56,6 +56,9 @@ export type SummarizeEngineOptions = PersonaOptions & {
   // Logging
   log?: boolean;
   logFile?: string;
+  // Debug-prompt passthrough
+  debugPrompt?: boolean;
+  promptOutFile?: string;
 };
 
 // Unifying length policies for L1..Lk
@@ -251,6 +254,8 @@ async function summarizeText(
       includeExtras: engine.generateExtras !== false,
       log: engine.log,
       logFile: engine.logFile,
+      debugPrompt: engine.debugPrompt,
+      promptOutFile: engine.promptOutFile,
     });
     let xml = res.xml || '';
     if ((!xml || !xml.includes(`<${rootTag}`)) && engine.allowHeuristicFallback) {

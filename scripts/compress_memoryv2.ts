@@ -75,6 +75,11 @@ async function main() {
   const wantLog = (getArg(args, '--log', 'true') || 'true').toLowerCase() === 'true';
   const defaultLogName = `${slug}.${new Date().toISOString().replace(/[:]/g,'_')}.run.log`;
   const logFile = getArg(args, '--log-file', path.join(logsDir, defaultLogName))!;
+  const debugPrompt = (getArg(args, '--debug-prompt', 'false') || 'false').toLowerCase() === 'true';
+  const promptsDir = path.resolve(process.cwd(), 'artefacts/prompts');
+  await fs.mkdir(promptsDir, { recursive: true });
+  const defaultPromptOut = path.join(promptsDir, `${slug}.${new Date().toISOString().replace(/[:]/g,'_')}.prompts.txt`);
+  const promptOutFile = getArg(args, '--prompt-file', defaultPromptOut)!;
 
   // Length policies
   const minSummary = Number(getArg(args, '--min-summary', '250'));
@@ -173,6 +178,7 @@ async function main() {
     paceDelayMs, retryAttempts, retryBaseMs, retryJitterMs,
     generateSignals, generateExtras,
     log: wantLog, logFile,
+    debugPrompt, promptOutFile,
   } as any;
 
   // Optional run header logging
@@ -183,10 +189,10 @@ async function main() {
       slug, level, onlyIndices, groupSize,
       windowChars, ensureAssistant, maxBlocks,
       persona: { profile, personaName, interlocutor, roleMap },
-      engine: { useVertex, project, location, model, callTimeoutMs, maxOutputTokens, allowHeuristicFallback, paceDelayMs, retryAttempts, retryBaseMs, retryJitterMs, generateSignals, generateExtras },
+      engine: { useVertex, project, location, model, callTimeoutMs, maxOutputTokens, allowHeuristicFallback, paceDelayMs, retryAttempts, retryBaseMs, retryJitterMs, generateSignals, generateExtras, debugPrompt, promptOutFile },
       policies: { minSummary, maxSummary, compressionLevel, wiggle, underflowMode: policies.underflowMode, overflowMode: policies.overflowMode, enforceAbsoluteRange: policies.enforceAbsoluteRange, regenerateRatioStep },
       batching: { concurrency, batchDelayMs },
-      paths: { parsedPath, outDir, logFile }
+      paths: { parsedPath, outDir, logFile, promptOutFile }
     };
     try {
       await fs.appendFile(logFile, `[${header.ts}] [script] runHeader ${JSON.stringify(header)}\n`, 'utf8');

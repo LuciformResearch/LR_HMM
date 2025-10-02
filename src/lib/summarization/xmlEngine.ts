@@ -1,6 +1,7 @@
 import { GoogleGenAI } from '@google/genai';
 
-export type XmlEngineMode = 'l1' | 'l2';
+// Accept any structured level tag, e.g., 'l1', 'l2', 'l3', ...
+export type XmlEngineMode = string;
 
 export type XmlEngineOpts = {
   useVertex: boolean;
@@ -49,17 +50,13 @@ export async function generateStructuredXML(
   const soft = opts.hintTarget ? `Objectif longueur: ${opts.hintTarget} caractères (cible douce).` : '';
   const cap = opts.hintCap ? `Ne JAMAIS dépasser ${opts.hintCap} caractères (cap dur).` : '';
 
-  const xmlRoot = mode === 'l1' ? 'l1' : 'l2';
-  const minimalSchema = mode === 'l1'
-    ? `<l1 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...]]></summary>\n</l1>`
-    : `<l2 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...]]></summary>\n</l2>`;
+  const xmlRoot = mode && /^l\d+$/i.test(mode) ? mode : 'l1';
+  const minimalSchema = `<${xmlRoot} minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...]]></summary>\n</${xmlRoot}>`;
   const wantSignals = (opts as any).includeSignals !== false; // default true
   const wantExtras = (opts as any).includeExtras !== false;   // default true
   const signalsBlock = wantSignals ? `\n  <signals><![CDATA[{\\"themes\\":[...],\\"timeline\\":[{\\"t\\":\\"00:12\\",\\"event\\":\\"...\\"}]}]]></signals>` : '';
   const extrasBlock = wantExtras ? `\n  <extras>\n    <omission>...</omission>\n  </extras>` : '';
-  const fullSchema = mode === 'l1'
-    ? `<l1 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <orgs><o>...</o></orgs>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>${signalsBlock}${extrasBlock}\n</l1>`
-    : `<l2 minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>${signalsBlock}${extrasBlock}\n</l2>`;
+  const fullSchema = `<${xmlRoot} minChars=\"${Math.max(50, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary><![CDATA[...${opts.minChars}-${opts.maxChars} caractères environ, factuel, sans invention...]]></summary>\n  <tags>\n    <tag>...</tag>\n  </tags>\n  <entities>\n    <persons><p>...</p></persons>\n    <orgs><o>...</o></orgs>\n    <artifacts><a>...</a></artifacts>\n    <places><pl>...</pl></places>\n    <times><t>...</t></times>\n  </entities>${signalsBlock}${extrasBlock}\n</${xmlRoot}>`;
   const schema = opts.directOutput ? minimalSchema : fullSchema;
 
   // Persona/prompt preamble

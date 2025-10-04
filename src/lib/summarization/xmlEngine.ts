@@ -70,6 +70,9 @@ export async function generateStructuredXML(
   const cap = opts.hintCap ? `Pour <summary> UNIQUEMENT: ne JAMAIS dépasser ${opts.hintCap} caractères (cap dur).` : '';
 
   const xmlRoot = mode && /^l\d+$/i.test(mode) ? mode : 'l1';
+  const isLk = /^l[2-9]\d*$/i.test(xmlRoot);
+  const lvlNum = (() => { try { const m = String(xmlRoot).match(/^(?:l)(\d+)$/i); return m ? Math.max(1, parseInt(m[1], 10)) : 1; } catch { return 1; } })();
+  const baseLvl = Math.max(1, lvlNum - 1);
   const targetLenAttr = Math.max(0, Math.round(opts.hintTarget || Math.max(0, Math.floor((opts.minChars + opts.maxChars) / 2))))
   const minimalSchema = `<${xmlRoot} minChars=\"${Math.max(0, opts.minChars)}\" maxChars=\"${opts.maxChars}\" version=\"1\">\n  <summary targetLen=\"${targetLenAttr}\"><![CDATA[...]]></summary>\n</${xmlRoot}>`;
   const wantSignals = (opts as any).includeSignals !== false; // default true
@@ -87,9 +90,12 @@ export async function generateStructuredXML(
   const names = Array.from(new Set((opts.allowedNames || []).filter(Boolean)));
   const otherNames = names.filter(n => n && n !== persona);
   const interlocutorsHint = otherNames.length ? otherNames.join(', ') : "l'utilisateur";
-  const docType = profile === 'email_recipient_fp' ? 'email' : (String(profile).includes('chat') ? 'transcript de chat' : 'document');
+  const baseDocType = profile === 'email_recipient_fp' ? 'email' : (String(profile).includes('chat') ? 'transcript de chat' : 'document');
+  const docType = isLk ? `résumés de ${baseDocType}` : baseDocType;
   const roleLine = `Rôle: ${persona}, Agent d'Introspection Mémoire Long Terme`;
-  const situationLine = `Situation: Résumé introspectif d’un document de type ${docType}. (Conversation avec ${interlocutorsHint})`;
+  const situationLine = isLk
+    ? `Situation: Résumé introspectif d’un regroupement de ${docType}. (Basé sur des résumés L${baseLvl}; conversation d’origine avec ${interlocutorsHint})`
+    : `Situation: Résumé introspectif d’un document de type ${docType}. (Conversation avec ${interlocutorsHint})`;
   const summaryRules = `Dans <summary>, écris à la 1ʳᵉ personne, introspectif, factuel, fidèle au ton de ${persona}, sans "tu/vous" (sauf en citations), sans invention ni variantes de noms.`;
   const prompt = `${roleLine}\n${situationLine}\n${summaryRules}\n${soft} ${cap}\nProduis STRICTEMENT un XML conforme au schéma suivant (aucun texte hors XML):\n\n${schema}\n\nDocuments:\n${documents}`;
 

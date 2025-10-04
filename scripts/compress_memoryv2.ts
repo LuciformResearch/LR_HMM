@@ -106,7 +106,7 @@ async function main() {
   const concurrency = Math.max(1, Number(getArg(args, '--concurrency', '20')));
   const batchDelayMs = Number(getArg(args, '--batch-delay-ms', '0'));
   const groupSize = Math.max(2, Number(getArg(args, '--group-size', '5')));
-  const fromL1 = getArg(args, '--from-l1');
+  const groupChars = Math.max(0, Number(getArg(args, '--group-chars', '0')));
   const onlyIndicesArg = getArg(args, '--only-indices');
   const onlyIndices = onlyIndicesArg ? (() => {
     const out: number[] = [];
@@ -158,14 +158,33 @@ async function main() {
       l1Blocks = l1Blocks.slice(0, 1);
     }
   } else {
-    const defaultL1Path = path.join(outDir, `${slug}.l1.v2.json`);
-    const l1Path = fromL1 ? path.resolve(process.cwd(), fromL1) : defaultL1Path;
-    const rawL1 = await fs.readFile(l1Path, 'utf8');
-    const parsedL1 = JSON.parse(rawL1) as { summaries: LSummary[] };
-    const l1 = parsedL1.summaries || [];
-    // Group into fixed-size arrays
-    for (let i = 0; i < l1.length; i += groupSize) {
-      lGroups.push(l1.slice(i, Math.min(i + groupSize, l1.length)));
+    // Resolve previous level artefact path: use --in if provided, else auto-deduce L(level-1)
+    const prevLevel = Math.max(1, level - 1);
+    const defaultPrevPath = path.join(outDir, `${slug}.l${prevLevel}.v2.json`);
+    const prevPath = inPathArg ? path.resolve(process.cwd(), inPathArg) : defaultPrevPath;
+    const rawPrev = await fs.readFile(prevPath, 'utf8');
+    const parsedPrev = JSON.parse(rawPrev) as { summaries: LSummary[] };
+    const lPrev = parsedPrev.summaries || [];
+    // Grouping: by char budget if --group-chars > 0, else by fixed count (--group-size)
+    if (groupChars > 0) {
+      let current: LSummary[] = [];
+      let used = 0;
+      const charOf = (s: LSummary) => Math.max(0, Number(s.summaryChars || 0));
+      for (const s of lPrev) {
+        const need = charOf(s);
+        if (current.length > 0 && used + need > groupChars) {
+          lGroups.push(current);
+          current = [];
+          used = 0;
+        }
+        current.push(s);
+        used += need;
+      }
+      if (current.length > 0) lGroups.push(current);
+    } else {
+      for (let i = 0; i < lPrev.length; i += groupSize) {
+        lGroups.push(lPrev.slice(i, Math.min(i + groupSize, lPrev.length)));
+      }
     }
     if (debugPrompt && lGroups.length > 1) {
       lGroups = lGroups.slice(0, 1);

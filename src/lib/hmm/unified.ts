@@ -355,13 +355,16 @@ export async function summarizeSummaryGroups(
   opts: SummarizeExecOptions
 ): Promise<LSummary[]> {
   const concurrency = Math.max(1, opts.concurrency || 3);
-  function toDocs(g: LSummary[]): string {
-    return g.map((s, i) => `---\n[Item #${i + 1} | ${s.summaryChars} chars]\n${s.summary}`).join('\n');
+  function toDocs(g: LSummary[], personaName?: string): string {
+    const who = (personaName && String(personaName).trim()) || 'ShadeOS';
+    return g
+      .map((s, i) => `---\n[Item #${i + 1} | ${s.summaryChars} chars]\n- ${who}: ${s.summary}`)
+      .join('\n');
   }
 
   return runPool(groups, async (g, gi) => {
     const totalChars = g.reduce((a, x) => a + (x.summaryChars || 0), 0);
-    const docs = toDocs(g);
+    const docs = toDocs(g, engine.personaName as any);
     const covers = g.flatMap(x => x.covers || []);
     const level = Math.max(2, opts.level || 2);
     const res = await summarizeText(

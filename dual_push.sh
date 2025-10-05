@@ -61,4 +61,3 @@ echo "[push] GitHub (github)"
 git push github "$BRANCH" --follow-tags
 
 echo "[done] Pushed to both remotes"
-

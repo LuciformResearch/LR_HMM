@@ -4,7 +4,13 @@
   "private": true,
   "scripts": {
     "lint": "eslint",
-    "clean": "rm -rf .next .next-vercel .vercel"
+    "clean": "rm -rf .next .next-vercel .vercel",
+    "drizzle:generate": "drizzle-kit generate",
+    "drizzle:migrate": "drizzle-kit migrate",
+    "db:ensure": "tsx scripts/db_sync.ts ensure",
+    "db:upsert": "tsx scripts/db_sync.ts upsert",
+    "db:embed": "tsx scripts/db_sync.ts embed",
+    "rag:answer": "tsx scripts/rag_answer.ts"
   },
   "dependencies": {
     "@google/genai": "^0.3.1",
@@ -12,6 +18,7 @@
     "@luciformresearch/xmlparser": "^0.2.4",
     "crypto-js": "^4.2.0",
     "dotenv": "^17.2.2",
+    "drizzle-orm": "^0.44.6",
     "google-auth-library": "^9.0.0",
     "node-fetch": "^2.7.0",
     "pg": "^8.11.3"
@@ -19,6 +26,7 @@
   "devDependencies": {
     "@types/node": "^20",
     "@types/pg": "^8.11.0",
+    "drizzle-kit": "^0.31.5",
     "tsx": "^4.20.5",
     "typescript": "^5"
   }

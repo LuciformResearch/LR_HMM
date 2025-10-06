@@ -11,7 +11,10 @@
     "db:upsert": "tsx scripts/db_sync.ts upsert",
     "db:embed": "tsx scripts/db_sync.ts embed",
     "rag:answer": "tsx scripts/rag_answer.ts",
-    "parse:gpt": "tsx scripts/parse_gpt_export.ts"
+    "parse:gpt": "tsx scripts/parse_gpt_export.ts",
+    "mcp:start": "tsx src/mcp/server.ts",
+    "persona:shadeos": "tsx scripts/compose_persona_shadeos.ts --out-dir personas --out ShadeOS_dynamic.generated.luciform",
+    "simulate:incremental": "tsx scripts/simulate_incremental_chat.ts --in artefacts/HMM/parsed/2025-06-25__orage_codé_textuel.json --vertexai true"
   },
   "dependencies": {
     "@google/genai": "^0.3.1",
@@ -22,7 +25,9 @@
     "drizzle-orm": "^0.44.6",
     "google-auth-library": "^9.0.0",
     "node-fetch": "^2.7.0",
-    "pg": "^8.11.3"
+    "pg": "^8.11.3",
+    "@modelcontextprotocol/sdk": "^0.2.0",
+    "zod": "^3.23.8"
   },
   "devDependencies": {
     "@types/node": "^20",

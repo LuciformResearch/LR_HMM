@@ -2,6 +2,7 @@
   "useVertex": true,
   "budget": { "tokens": "small" },
   "query": {
+    "text": "résumer l'orage et klymaion",
     "intent": "synthesis"
   },
   "policy": {

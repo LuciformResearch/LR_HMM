@@ -131,6 +131,7 @@ async function main() {
       covers.length &&
       (meanHighSim < (planJson?.decompression?.triggers?.meanSimLt ?? 1.0))
     );
+    let didDrill = false;
     if (shouldDrill) {
       const low = await index.search([1], vec, {
         topk: effectivePolicy.topkDrill,
@@ -141,8 +142,40 @@ async function main() {
         timeWindow: query.timeWindow ? { from: query.timeWindow.from?.toISOString(), to: query.timeWindow.to?.toISOString() } : undefined
       });
       expanded = mergeUnique(scored, low);
+      didDrill = true;
     } else {
       expanded = scored;
+    }
+
+    // Optional: expand time window and retry retrieval if saturation is low
+    let expandedTimeWindowApplied = false;
+    if (planJson?.decompression?.timeWindowExpandHours && meanHighSim < (planJson?.decompression?.triggers?.meanSimLt ?? 0.75) && query.timeWindow?.from && query.timeWindow?.to) {
+      try {
+        const hours = Math.max(1, Number(planJson.decompression.timeWindowExpandHours || 0));
+        const fromTs = new Date(query.timeWindow.from.getTime() - hours*60*60*1000);
+        const toTs = new Date(query.timeWindow.to.getTime() + hours*60*60*1000);
+        const initialExt = await index.search(levels, vec, {
+          topk: effectivePolicy.topkInitial,
+          conversationId: convId ?? undefined,
+          tagsAny: query.hints?.tags,
+          entitiesAny: query.hints?.entities,
+          timeWindow: { from: fromTs.toISOString(), to: toTs.toISOString() }
+        });
+        const withSim2 = (initialExt as any[]).map(c => ({ ...c, sim: c.score || 0 }));
+        let rescored = scoreAndDiversify(withSim2 as any, effectivePolicy);
+        if (planJson?.acceptance?.minSimBase != null) {
+          const minSimBase2 = planJson.acceptance.minSimBase;
+          const scarcityBoost2 = planJson.acceptance.scarcityBoost ?? 0.08;
+          const minSim2 = Math.max(0, Math.min(1, minSimBase2 - scarcityBoost2 * (budget === 'small' ? 1 : budget === 'medium' ? 0.5 : 0)));
+          const exploration2 = Math.max(0, Math.floor(planJson.acceptance.explorationSlots ?? (budget === 'small' ? 2 : 1)));
+          const pass2 = (rescored as any[]).filter(c => (c.sim ?? 0) >= minSim2);
+          const rej2 = (rescored as any[]).filter(c => (c.sim ?? 0) < minSim2);
+          rescored = [...pass2, ...rej2.slice(0, exploration2)] as any;
+        }
+        // Merge with current expanded list and continue
+        expanded = mergeUnique(expanded, rescored as any);
+        expandedTimeWindowApplied = true;
+      } catch {}
     }
 
     // Stage C: reranking stage1/2
@@ -152,15 +185,21 @@ async function main() {
 
     // Stage D: compose context
     const bundle = composeContext(reranked, effectivePolicy);
-    // Optional quotes from L1 covers
+    // Optional quotes from L1 covers (deduplicated by index)
     let quotes: Array<{ level: number; index: number|null; excerpt: string; sim?: number }> = [];
     if (planJson?.expandPolicy?.enableCovers) {
       const perHigh = Math.max(0, Math.floor(planJson.expandPolicy.quotesPerHigh ?? 2));
       const maxChars = Math.max(80, Math.floor(planJson.expandPolicy.quoteMaxChars ?? 300));
       const lowL1 = bundle.low.filter(x => x.level === 1);
+      const seen = new Set<number>();
       for (const h of bundle.high as any[]) {
         const picks = lowL1.filter(l => (h.covers || []).includes(l.index as any)).slice(0, perHigh);
-        for (const p of picks as any[]) quotes.push({ level: p.level, index: p.index ?? null, excerpt: (p.content||'').slice(0, maxChars), sim: p.sim });
+        for (const p of picks as any[]) {
+          const idx = (p.index ?? -1) as number;
+          if (idx >= 0 && seen.has(idx)) continue;
+          seen.add(idx);
+          quotes.push({ level: p.level, index: p.index ?? null, excerpt: (p.content||'').slice(0, maxChars), sim: (p as any).sim });
+        }
       }
     }
     const output = {
@@ -171,7 +210,14 @@ async function main() {
         low: bundle.low.map(p => ({ id: p.id, level: p.level, index: p.index, score: p.score, charCount: p.charCount, covers: p.covers || [], content: p.content }))
       },
       quotes,
-      coversUnion: covers
+      coversUnion: covers,
+      diagnostics: {
+        budget,
+        meanHighSim,
+        didDrill,
+        expandedTimeWindow: expandedTimeWindowApplied,
+        quotesCount: quotes.length
+      }
     };
     if (composePrompt || exportPromptFlag || (exportPromptArg && exportPromptArg !== 'true' && exportPromptArg !== '1')) {
       const prompt = composeFinalPrompt(output, query);
@@ -335,6 +381,13 @@ function composeFinalPrompt(output: any, query: IRagQuery): string {
   for (const l of output.picks.low || []) {
     parts.push(`- [L1 #${l.index ?? '?'} | score=${(l.score||0).toFixed(3)}]`);
     parts.push(limitText(l.content, 800));
+  }
+  if (output.quotes && Array.isArray(output.quotes) && output.quotes.length) {
+    parts.push(`\n## Extraits (L1)`);
+    for (const q of output.quotes) {
+      const sim = (q.sim != null) ? ` | sim=${Number(q.sim).toFixed(3)}` : '';
+      parts.push(`- [L1 #${q.index ?? '?'}${sim}] ${limitText(q.excerpt || '', 320)}`);
+    }
   }
   parts.push(`\n## Question`);
   parts.push(query.text || '');

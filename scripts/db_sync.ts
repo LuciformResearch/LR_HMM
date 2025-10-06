@@ -44,6 +44,8 @@ async function upsertFromArtefact(client: Client, artefactPath: string) {
   const title = slug.replace(/_/g, ' ');
   await client.query('BEGIN');
   try {
+    // Ensure optional idx column on messages for recency alignment
+    await client.query(`DO $$ BEGIN BEGIN ALTER TABLE messages ADD COLUMN IF NOT EXISTS idx INT; EXCEPTION WHEN others THEN NULL; END; END $$;`);
     // conversation
     const convRes = await client.query(
       `INSERT INTO conversations (slug, title) VALUES ($1, $2)
@@ -74,22 +76,167 @@ async function upsertFromArtefact(client: Client, artefactPath: string) {
             `UPDATE summaries SET covers=$1::jsonb, content=$2, content_hash=$3, char_count=$4, topics=$5, meta=$6::jsonb WHERE id=$7`,
             [covers, content, contentHash, charCount, topics, JSON.stringify(meta), id]
           );
+          // Align time range and created_at depending on level
+          if (level === 1) {
+            await client.query(
+              `UPDATE summaries s SET 
+                 range_start_ts = COALESCE((
+                   SELECT MIN(m.ts::timestamptz)
+                   FROM messages m
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE m.conversation_id = s.conversation_id AND m.idx = (j.val)::int
+                 ), s.range_start_ts),
+                 range_end_ts = COALESCE((
+                   SELECT MAX(m.ts::timestamptz)
+                   FROM messages m
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE m.conversation_id = s.conversation_id AND m.idx = (j.val)::int
+                 ), s.range_end_ts),
+                 created_at = COALESCE((
+                   SELECT MAX(m.ts::timestamptz)
+                   FROM messages m
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE m.conversation_id = s.conversation_id AND m.idx = (j.val)::int
+                 ), s.created_at)
+               WHERE s.id = $1`, [id]
+            );
+          } else {
+            await client.query(
+              `UPDATE summaries s SET 
+                 range_start_ts = COALESCE((
+                   SELECT MIN(s1.range_start_ts)
+                   FROM summaries s1
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE s1.conversation_id = s.conversation_id AND s1.level = 1 AND s1.idx = (j.val)::int
+                 ), s.range_start_ts),
+                 range_end_ts = COALESCE((
+                   SELECT MAX(s1.range_end_ts)
+                   FROM summaries s1
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE s1.conversation_id = s.conversation_id AND s1.level = 1 AND s1.idx = (j.val)::int
+                 ), s.range_end_ts),
+                 created_at = COALESCE((
+                   SELECT MAX(s1.created_at)
+                   FROM summaries s1
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE s1.conversation_id = s.conversation_id AND s1.level = 1 AND s1.idx = (j.val)::int
+                 ), s.created_at)
+               WHERE s.id = $1`, [id]
+            );
+          }
         } else {
-          await client.query(
+          const ins = await client.query(
             `INSERT INTO summaries (conversation_id, level, idx, covers, content, content_hash, char_count, topics, meta)
-             VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9::jsonb)`,
+             VALUES ($1,$2,$3,$4::jsonb,$5,$6,$7,$8,$9::jsonb) RETURNING id`,
             [conversationId, level, indexVal, covers, content, contentHash, charCount, topics, JSON.stringify(meta)]
           );
+          const id = ins.rows[0].id as number;
+          if (level === 1) {
+            await client.query(
+              `UPDATE summaries s SET 
+                 range_start_ts = COALESCE((
+                   SELECT MIN(m.ts::timestamptz)
+                   FROM messages m
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE m.conversation_id = s.conversation_id AND m.idx = (j.val)::int
+                 ), s.range_start_ts),
+                 range_end_ts = COALESCE((
+                   SELECT MAX(m.ts::timestamptz)
+                   FROM messages m
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE m.conversation_id = s.conversation_id AND m.idx = (j.val)::int
+                 ), s.range_end_ts),
+                 created_at = COALESCE((
+                   SELECT MAX(m.ts::timestamptz)
+                   FROM messages m
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE m.conversation_id = s.conversation_id AND m.idx = (j.val)::int
+                 ), s.created_at)
+               WHERE s.id = $1`, [id]
+            );
+          } else {
+            await client.query(
+              `UPDATE summaries s SET 
+                 range_start_ts = COALESCE((
+                   SELECT MIN(s1.range_start_ts)
+                   FROM summaries s1
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE s1.conversation_id = s.conversation_id AND s1.level = 1 AND s1.idx = (j.val)::int
+                 ), s.range_start_ts),
+                 range_end_ts = COALESCE((
+                   SELECT MAX(s1.range_end_ts)
+                   FROM summaries s1
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE s1.conversation_id = s.conversation_id AND s1.level = 1 AND s1.idx = (j.val)::int
+                 ), s.range_end_ts),
+                 created_at = COALESCE((
+                   SELECT MAX(s1.created_at)
+                   FROM summaries s1
+                   JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                   WHERE s1.conversation_id = s.conversation_id AND s1.level = 1 AND s1.idx = (j.val)::int
+                 ), s.created_at)
+               WHERE s.id = $1`, [id]
+            );
+          }
         }
       } else {
         // Upsert by (conversation_id, level, content_hash)
-        await client.query(
+        const up = await client.query(
           `INSERT INTO summaries (conversation_id, level, covers, content, content_hash, char_count, topics, meta)
            VALUES ($1,$2,$3::jsonb,$4,$5,$6,$7,$8::jsonb)
            ON CONFLICT (conversation_id, level, content_hash)
-           DO UPDATE SET covers=EXCLUDED.covers, content=EXCLUDED.content, char_count=EXCLUDED.char_count, topics=EXCLUDED.topics, meta=EXCLUDED.meta`,
+           DO UPDATE SET covers=EXCLUDED.covers, content=EXCLUDED.content, char_count=EXCLUDED.char_count, topics=EXCLUDED.topics, meta=EXCLUDED.meta
+           RETURNING id`,
           [conversationId, level, covers, content, contentHash, charCount, topics, JSON.stringify(meta)]
         );
+        const id = up.rows[0].id as number;
+        if (level === 1) {
+          await client.query(
+            `UPDATE summaries s SET 
+               range_start_ts = COALESCE((
+                 SELECT MIN(m.ts::timestamptz)
+                 FROM messages m
+                 JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                 WHERE m.conversation_id = s.conversation_id AND m.idx = (j.val)::int
+               ), s.range_start_ts),
+               range_end_ts = COALESCE((
+                 SELECT MAX(m.ts::timestamptz)
+                 FROM messages m
+                 JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                 WHERE m.conversation_id = s.conversation_id AND m.idx = (j.val)::int
+               ), s.range_end_ts),
+               created_at = COALESCE((
+                 SELECT MAX(m.ts::timestamptz)
+                 FROM messages m
+                 JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                 WHERE m.conversation_id = s.conversation_id AND m.idx = (j.val)::int
+               ), s.created_at)
+             WHERE s.id = $1`, [id]
+          );
+        } else {
+          await client.query(
+            `UPDATE summaries s SET 
+               range_start_ts = COALESCE((
+                 SELECT MIN(s1.range_start_ts)
+                 FROM summaries s1
+                 JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                 WHERE s1.conversation_id = s.conversation_id AND s1.level = 1 AND s1.idx = (j.val)::int
+               ), s.range_start_ts),
+               range_end_ts = COALESCE((
+                 SELECT MAX(s1.range_end_ts)
+                 FROM summaries s1
+                 JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                 WHERE s1.conversation_id = s.conversation_id AND s1.level = 1 AND s1.idx = (j.val)::int
+               ), s.range_end_ts),
+               created_at = COALESCE((
+                 SELECT MAX(s1.created_at)
+                 FROM summaries s1
+                 JOIN LATERAL jsonb_array_elements_text(COALESCE(s.covers, '[]')) AS j(val) ON true
+                 WHERE s1.conversation_id = s.conversation_id AND s1.level = 1 AND s1.idx = (j.val)::int
+               ), s.created_at)
+             WHERE s.id = $1`, [id]
+          );
+        }
       }
     }
 

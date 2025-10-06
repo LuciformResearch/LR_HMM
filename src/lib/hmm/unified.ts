@@ -431,6 +431,10 @@ export async function summarizeBatched(
     const slice = workset.slice(i, Math.min(i + chunkSize, workset.length));
     const sliceItems = slice.map(s => s.item);
     const sliceResults = await summarize(sliceItems as any, { ...engine, logStartMs: startMs, timeZone: tz }, policies, { ...opts, concurrency: Math.min(chunkSize, slice.length) });
+    // Remap indices to global original indices to ensure coherence across batches
+    for (let k = 0; k < sliceResults.length; k++) {
+      if (sliceResults[k]) (sliceResults[k] as any).index = slice[k]?.idx;
+    }
     results.push(...sliceResults);
     if (i + chunkSize < workset.length && delay > 0) {
       await new Promise(res => setTimeout(res, delay));

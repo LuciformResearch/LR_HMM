@@ -23,7 +23,9 @@ CREATE TABLE IF NOT EXISTS summaries (
   char_count INT,
   topics TEXT[],
   meta JSONB,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  range_start_ts TIMESTAMPTZ,
+  range_end_ts TIMESTAMPTZ
 );
 -- Ensure columns exist on legacy summaries
 DO $$ BEGIN
@@ -33,6 +35,8 @@ DO $$ BEGIN
     ALTER TABLE summaries ADD COLUMN IF NOT EXISTS topics TEXT[];
     ALTER TABLE summaries ADD COLUMN IF NOT EXISTS meta JSONB;
     ALTER TABLE summaries ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NOT NULL DEFAULT NOW();
+    ALTER TABLE summaries ADD COLUMN IF NOT EXISTS range_start_ts TIMESTAMPTZ;
+    ALTER TABLE summaries ADD COLUMN IF NOT EXISTS range_end_ts TIMESTAMPTZ;
   EXCEPTION WHEN others THEN NULL; END;
 END $$;
 

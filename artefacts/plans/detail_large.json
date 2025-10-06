@@ -1,0 +1,19 @@
+{
+  "useVertex": true,
+  "budget": { "tokens": "large" },
+  "query": {
+    "intent": "detail"
+  },
+  "policy": {
+    "levelQuotas": { "3": 2, "2": 4, "1": 10 },
+    "weights": { "similarity": 1.0, "level": -0.2, "recency": 0.25, "diversity": 0.25 },
+    "expand": { "coversOnly": true, "perGroupTopM": 4 },
+    "rerank": { "stage1": true, "stage2": true, "topnFinal": 18 },
+    "compose": { "maxHigh": 3, "maxLow": 12 },
+    "topkInitial": 48,
+    "topkDrill": 48
+  },
+  "acceptance": { "minSimBase": 0.60, "scarcityBoost": 0.04, "explorationSlots": 1 },
+  "expandPolicy": { "enableCovers": true, "quotesPerHigh": 2, "quoteMaxChars": 360 },
+  "decompression": { "enableLkToL1": true, "triggers": { "meanSimLt": 0.75 }, "timeWindowExpandHours": 24 }
+}

@@ -1,12 +1,11 @@
-# LR HMM Scripts
+# LR Hierarchical Memory Manager
 
-Projet expérimental en évolution rapide — API/flags et prompts peuvent changer. Beaucoup reste à faire (unification complète L1/L2, normalisations entités, intégration DB/RAG renforcée). Consultez les Runbooks dans `Reports/Runbooks` pour l’état le plus à jour.
+Gestion hiérarchique de mémoire (L1 → L2 → L3) avec ingestion Postgres/pgvector et RAG “level‑aware” (recherche multi‑niveaux, drill‑down covers‑only, reranking, composition de contexte). Pipeline complet: import ChatGPT export → L1/L2/L3 → DB/embeddings → RAG answer + prompt export.
 
-## Prérequis
+## 1) Prérequis & Environnement
 
-### Variables d'environnement
+### Variables d’environnement (.env.local recommandé)
 ```bash
-# Recommandé: .env.local (ignoré par git)
 GOOGLE_APPLICATION_CREDENTIALS=secrets/lr-hub-472010-17b9f2d37953.json
 PROJECT_ID=lr-hub-472010
 GOOGLE_CLOUD_PROJECT=lr-hub-472010
@@ -14,144 +13,128 @@ VERTEX_LOCATION=europe-west1
 LOCATION=europe-west1
 ```
 
-### Base de données locale
+### Base de données locale (Postgres 16 + pgvector)
 ```bash
 docker compose -f docker-compose.db.yml up -d
 ```
 
-## Scripts principaux
+## 2) Import d’un export ChatGPT (conversations.json)
 
-### Vérification de l'accès Vertex AI
+Le parseur consomme directement l’export standard ChatGPT (clé `mapping` avec nœuds). Il filtre les rôles non supportés et produit un artefact parsé + ingestion DB (conversations + messages).
+
 ```bash
-npx tsx scripts/check_vertexai_access.ts
+# Lister les conversations disponibles dans l’export
+npm run parse:gpt -- --list --in /home/luciedefraiteur/luciform_research/ShadeOSFinal_Extracted/conversations.json
+
+# Extraire par index et ingérer en DB (messages role=user|assistant uniquement)
+npm run parse:gpt -- \
+  --index 220 \
+  --in /home/luciedefraiteur/luciform_research/ShadeOSFinal_Extracted/conversations.json \
+  --db true
+
+# Sortie parsée (JSON)
+# artefacts/HMM/parsed/<YYYY-MM-DD>__<slug>.json
 ```
 
-### Compression mémoire L1 — Nouvelle façade unifiée (v2)
-Le script `compress_memoryv2.ts` utilise l’API unifiée (`summarize`/`summarizeBatched`) et le moteur XML refactoré.
+Schéma DB (parties utiles):
+- `messages(idx, ts, content)`: `idx` = index d’ordre source; `ts` = ISO.
+- `summaries(level, idx, covers, content, topics, meta, created_at, range_start_ts, range_end_ts)`.
+  - `range_*` sont recalés à partir des `covers` (L1: min/max messages.ts; L2/L3: min/max des L1 couverts).
 
-Exemple “batch complet” (profil chat assistant, persona ShadeOS), sortie structurée (summary + tags + entities{persons, orgs, artifacts, places, times, other} + signals + extras):
+## 3) Génération hiérarchique L1 / L2 / L3
+
+Script unifié: `scripts/compress_memoryv2.ts`. L1 prend l’artefact parsé. L2/L3 prennent l’artefact du niveau précédent (auto‑déduit si omis) et supportent le groupage par budget de caractères.
+
+Exemples (paramètres utilisés dans nos runs):
+
 ```bash
+# L1 — ratio-only (cible 0.10), rôles stricts user/assistant, indices globalement cohérents
 npx tsx scripts/compress_memoryv2.ts \
   --slug 2025-06-25__orage_codé_textuel \
-  --vertexai true --model gemini-2.5-flash \
   --level 1 \
-  --profile chat_assistant_fp --persona-name ShadeOS \
-  --role-map "assistant=ShadeOS,user=Lucie" \
-  --window-chars 4000 \
-  --min-summary 250 --max-summary 400 --short-mode regenerate \
-  --concurrency 20 \
-  --batch-delay-ms 3000 \
-  --max-output-tokens 1024 \
-  --allow-heuristic-fallback true \
-  --engine-retry-attempts 3 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300
-```
-
-Variante “ratio-only” (pas de cap dur; objectif de longueur appliqué à <summary> uniquement; utile pour explorer la dérive naturelle):
-```bash
-npx tsx scripts/compress_memoryv2.ts \
-  --slug 2025-06-25__orage_codé_textuel \
   --vertexai true --model gemini-2.5-flash \
-  --level 1 \
-  --ratio-only true --target-ratio 0.10 \
+  --ratio-only true --target-ratio 0.10 --wiggle 0.2 \
   --short-mode accept --overflow-mode accept \
   --concurrency 20 --batch-delay-ms 1500 \
-  --engine-retry-attempts 1
+  --engine-retry-attempts 1 \
   --profile chat_assistant_fp --persona-name ShadeOS \
   --role-map "assistant=ShadeOS,user=Lucie" \
-  --window-chars 4000 \
-  --min-summary 250 --max-summary 400 --short-mode regenerate \
-  --concurrency 20 \
-  --batch-delay-ms 3000 \
-  --max-output-tokens 1024 \
-  --allow-heuristic-fallback true \
-  --engine-retry-attempts 3 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300
-```
+  --window-chars 4000 --log
 
-Régénération partielle de quelques index (ne traite que les indices demandés):
-```bash
-# Exemple: régénérer les indices 34, 39, et la plage 43–49
+# L2 — groupage par budget 10k chars (préserve les items); ratio-only 0.10
 npx tsx scripts/compress_memoryv2.ts \
   --slug 2025-06-25__orage_codé_textuel \
+  --level 2 --group-chars 10000 \
   --vertexai true --model gemini-2.5-flash \
-  --level 1 \
-  --profile chat_assistant_fp --persona-name ShadeOS \
-  --role-map "assistant=ShadeOS,user=Lucie" \
-  --window-chars 4000 \
-  --min-summary 250 --max-summary 400 --short-mode regenerate \
-  --concurrency 6 \
-  --max-output-tokens 1024 \
-  --allow-heuristic-fallback true \
-  --only-indices "34,39,43-49"
-```
+  --ratio-only true --target-ratio 0.10 --wiggle 0.2 \
+  --short-mode accept --overflow-mode accept \
+  --concurrency 20 --batch-delay-ms 1500 --engine-retry-attempts 1 --log
 
-Notes:
-- Chaque entrée L1 contient un champ `index` qui correspond à sa position dans `summaries[]` (utile pour la régénération ciblée).
-- Le remap des rôles vers `ShadeOS:`/`Lucie:` est contrôlé par `--role-map` et peut être adapté à d’autres canaux (emails, org voice, etc.) via `--profile`/`--persona-name`.
-- L1 structuré inclut désormais `tags`, `entities` (persons, orgs, artifacts, places, times), `signals` (JSON CDATA) et `extras` (omissions/texte). DirectOutput reste minimal et peut être enrichi via extracteurs.
-- Lissage charge API: utilisez `--concurrency` (taille de lot) + `--batch-delay-ms` (pause entre lots) côté script, et les options `--engine-retry-*` pour le backoff interne de l’xmlEngine.
-
-### Compression mémoire L2 (v2, via `--level`)
-Le script v2 accepte `--level`. Pour L2, fournissez les L1 via `--from-l1` (par défaut: artefacts/HMM/compressed/<slug>.l1.v2.json). Grouping via `--group-size`.
-```bash
+# L3 — idem L2
 npx tsx scripts/compress_memoryv2.ts \
   --slug 2025-06-25__orage_codé_textuel \
+  --level 3 --group-chars 10000 \
   --vertexai true --model gemini-2.5-flash \
-  --level 2 --group-size 5 --concurrency 8 \
-  --from-l1 artefacts/HMM/compressed/2025-06-25__orage_codé_textuel.l1.v2.json \
-  --target-ratio 0.15 --wiggle 0.2 \
-  --overflow-mode regenerate --underflow-mode regenerate \
-  --max-output-tokens 4096 --call-timeout-ms 35000 \
-  --engine-retry-attempts 2 --engine-retry-base-ms 600 --engine-retry-jitter-ms 300 --log
+  --ratio-only true --target-ratio 0.10 --wiggle 0.2 \
+  --short-mode accept --overflow-mode accept \
+  --concurrency 20 --batch-delay-ms 1500 --engine-retry-attempts 1 --log
 ```
 
-### Debug & Logs
-Prompt debug (capture le prompt exact et n’appelle pas l’API):
+Sorties:
+- `artefacts/HMM/compressed/<slug>.l1.v2.json`
+- `artefacts/HMM/compressed/<slug>.l2.v2.json`
+- `artefacts/HMM/compressed/<slug>.l3.v2.json`
+
+## 4) Schéma SQL & Ingestion des résumés
+
+Générer et appliquer le schéma dynamique (tables/colonnes/idx nécessaires):
 ```bash
-npx tsx scripts/compress_memoryv2.ts \
+npx tsx scripts/schema_codegen.ts --dim 768
+npm run db:ensure
+```
+
+Ingestion des artefacts (idempotent; aligne `range_*`/`created_at` selon covers/messages):
+```bash
+npm run db:upsert -- --in artefacts/HMM/compressed/<slug>.l1.v2.json
+npm run db:upsert -- --in artefacts/HMM/compressed/<slug>.l2.v2.json
+npm run db:upsert -- --in artefacts/HMM/compressed/<slug>.l3.v2.json
+```
+
+## 5) Embeddings (pgvector) & Index
+
+```bash
+# Embeddings par niveau (Vertex recommandé; Studio fallback via GEMINI_API_KEY)
+npm run db:embed -- --slug <slug> --vertexai true --embed-model text-embedding-004 --where-level 1 --limit 500
+npm run db:embed -- --slug <slug> --vertexai true --embed-model text-embedding-004 --where-level 2 --limit 300
+npm run db:embed -- --slug <slug> --vertexai true --embed-model text-embedding-004 --where-level 3 --limit 50
+```
+
+## 6) RAG Answer (filtres, planner JSON, export de prompt)
+
+Le pipeline RAG exécute: recherche multi‑niveaux → (optionnel) drill‑down covers‑only Lk→L1 → reranking (stage1 quotas + MMR) → composition High/Low → export bundle ou prompt.
+
+Filtres & export prompt:
+```bash
+npm run rag:answer -- \
   --slug 2025-06-25__orage_codé_textuel \
-  --level 1 --only-indices 0 \
-  --debug-prompt true \
-  --profile chat_assistant_fp --persona-name ShadeOS --role-map "assistant=ShadeOS,user=Lucie"
-# Prompts: artefacts/prompts/<slug>.<timestamp>.prompts.txt
-# Logs:    artefacts/logs/<slug>.<timestamp>.run.log
+  --query "résumer l'orage et klymaion" \
+  --vertexai true --intent synthesis \
+  --tags orage,rituel --entities Lucie,Klymäiôn \
+  --from 2025-06-01 --to 2025-07-01 \
+  --compose-prompt --export-prompt
+# Prompt: artefacts/HMM/composed_prompt/<slug>/prompt_<ts>.txt + latest.txt
 ```
 
-### Embeddings vers DB
+Planner JSON (budget‑aware, triggers d’expansion, quotes L1) — exemples fournis:
 ```bash
-# Créer l'index vectoriel
-npx tsx scripts/db_create_index.ts
+# Synthesis budget “small” (diversité/recall renforcés)
+npm run rag:answer -- --slug 2025-06-25__orage_codé_textuel --plan artefacts/plans/synthesis_small.json --compose-prompt --export-prompt
 
-# Embeddings L1
-npx tsx scripts/db_embed_l1.ts --slug 2025-06-25__orage_codé_textuel --vertexai true
-
-# Embeddings L2
-npx tsx scripts/db_embed_l2.ts --slug 2025-06-25__orage_codé_textuel --vertexai true
+# Detail budget “large” (focus L1 + récence)
+npm run rag:answer -- --slug 2025-06-25__orage_codé_textuel --plan artefacts/plans/detail_large.json --compose-prompt --export-prompt
 ```
 
-### RAG Query
-```bash
-npx tsx scripts/rag_query.ts \
-  --slug 2025-06-25__orage_codé_textuel \
-  --query "mémoire fractale lucie" \
-  --topn 40 --topk 8 --min-sim 0.4 \
-  --rerank true --min-score 0.3 --batch 6 \
-  --vertexai true \
-  --call-timeout-ms 12000 --db-timeout-ms 12000 \
-  --expand true --log
-```
-
-### Context Composer
-```bash
-npx tsx scripts/context_compose.ts \
-  --vertexai true \
-  --slug 2025-06-25__orage_codé_textuel \
-  --query "mémoire fractale lucie" \
-  --budget-tokens 4000 \
-  --topn 40 --topk 8 --min-sim 0.55 \
-  --rerank true --min-score 0.3 --batch 8 \
-  --mmr-lambda 0.3 --expand-neighborhood 1 --recent-turns 8 \
-  --call-timeout-ms 10000 --db-timeout-ms 12000 --log
-```
+Le plan permet d’ajuster: `policy.weights/quotas`, `topk*`, `acceptance.minSimBase/scarcity`, `decompression.triggers.meanSimLt`, `expandPolicy.quotes*`, etc.
 
 ## Outils
 
@@ -160,28 +143,14 @@ npx tsx scripts/context_compose.ts \
 ./dual_push.sh --message "votre message" [--branch master]
 # Remotes:
 #   origin  -> git@gitlab.com:luciformresearch/lr_hmm.git
-#   github  -> https://github.com/LuciformResearch/LR_HMM.git
+#   github  -> git@github.com:LuciformResearch/LR_HMM.git
 ```
 
-## Structure des données
-
-- `artefacts/parsed/` : Conversations parsées
-- `artefacts/HMM/compressed/` : Mémoires L1 et L2 compressées
-- `artefacts/HMM/context/` : Contextes composés
-- `artefacts/logs/` : Logs d'exécution
-- `data/pgdata/` : Données PostgreSQL locale
-
-## Documentation
-
-Voir `Reports/Runbooks/` pour la documentation détaillée des processus HMM.
+## Notes & Changements récents
+- Parser ChatGPT: `scripts/parse_gpt_export.ts` + `npm run parse:gpt`.
+- L1 generator: ignore rôles ≠ `user|assistant`; correction des index globaux entre lots.
+- DB: `messages.idx`, `summaries.range_start_ts/range_end_ts` + réalignement `created_at`.
+- RAG: filtres (`--tags/--entities/--from/--to`), `--export-prompt` (avec `latest.txt`), `--plan` (budget‑aware, triggers drill, quotes L1 optionnelles).
 
 ## Licence
-
-Ce projet est distribué sous une variante MIT avec clause d'attribution renforcée, identique à celle utilisée dans LR Hub™.
-
-- Fichier: `LICENSE`
-- Attribution requise: "Basé sur LR Hub™ par Lucie Defraiteur"
-- Projet d'origine: https://gitlab.com/luciformresearch/lr_chat
-
-En résumé: vous pouvez utiliser, modifier et distribuer, y compris commercialement, à condition de conserver la mention de copyright et
-d’ajouter une attribution claire au projet d’origine. Voir le fichier `LICENSE` pour les termes complets.
+Variante MIT avec attribution renforcée (voir `LICENSE`).

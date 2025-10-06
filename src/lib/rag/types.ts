@@ -31,7 +31,18 @@ export type Candidate = {
 };
 
 export interface IRagIndex {
-  search(levels: number[], queryEmbedding: number[], opts: { topk: number; scopeCovers?: number[]; conversationId?: number }): Promise<Candidate[]>;
+  search(
+    levels: number[],
+    queryEmbedding: number[],
+    opts: {
+      topk: number;
+      scopeCovers?: number[];
+      conversationId?: number;
+      tagsAny?: string[];
+      entitiesAny?: string[];
+      timeWindow?: { from?: string; to?: string };
+    }
+  ): Promise<Candidate[]>;
   fetchByIds(ids: number[]): Promise<Candidate[]>;
   fetchCovers(level: number, ids: number[]): Promise<{ level: number; id: number; covers: number[] }[]>;
   getConversationIdBySlug(slug: string): Promise<number | null>;

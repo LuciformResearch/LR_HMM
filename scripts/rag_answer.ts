@@ -17,33 +17,129 @@ async function main() {
   const useVertex = (getArg(args, '--vertexai', 'false') || 'false').toLowerCase() === 'true';
   const exportFlag = args.includes('--export');
   const exportArg = getArg(args, '--export');
+  const tagsArg = getArg(args, '--tags');
+  const entitiesArg = getArg(args, '--entities');
+  const fromArg = getArg(args, '--from');
+  const toArg = getArg(args, '--to');
+  const composePrompt = args.includes('--compose-prompt');
+  const exportPromptFlag = args.includes('--export-prompt');
+  const exportPromptArg = getArg(args, '--export-prompt');
+  const planArg = getArg(args, '--plan');
 
-  const query: IRagQuery = { text, intent, budget: { tokens: 'medium' } };
-  const policy: RagPolicy = intent === 'synthesis'
+  const query: IRagQuery = {
+    text,
+    intent,
+    budget: { tokens: 'medium' },
+    timeWindow: (fromArg || toArg) ? { from: fromArg ? new Date(fromArg) : undefined, to: toArg ? new Date(toArg) : undefined } : undefined,
+    hints: {
+      tags: tagsArg ? tagsArg.split(',').map(s=>s.trim()).filter(Boolean) : undefined,
+      entities: entitiesArg ? entitiesArg.split(',').map(s=>s.trim()).filter(Boolean) : undefined,
+    }
+  };
+  // Optional plan overrides
+  let planJson: any = null;
+  if (planArg) {
+    const abs = path.resolve(process.cwd(), planArg);
+    try {
+      const rawPlan = await fs.readFile(abs, 'utf8');
+      planJson = JSON.parse(rawPlan);
+    } catch (e) {
+      console.error(`Failed to read plan file: ${planArg}`, e);
+    }
+  }
+  if (planJson?.query) {
+    if (typeof planJson.query.text === 'string') query.text = planJson.query.text;
+    if (typeof planJson.query.intent === 'string') query.intent = planJson.query.intent as any;
+    if (planJson.query.hints) {
+      query.hints = query.hints || {} as any;
+      if (Array.isArray(planJson.query.hints.tags)) query.hints!.tags = planJson.query.hints.tags;
+      if (Array.isArray(planJson.query.hints.entities)) query.hints!.entities = planJson.query.hints.entities;
+    }
+    if (planJson.query.timeWindow) {
+      query.timeWindow = {
+        from: planJson.query.timeWindow.from ? new Date(planJson.query.timeWindow.from) : undefined,
+        to: planJson.query.timeWindow.to ? new Date(planJson.query.timeWindow.to) : undefined,
+      };
+    }
+  }
+
+  const policy: RagPolicy = (query.intent || 'auto') === 'synthesis'
     ? { levelQuotas: { 3: 6, 2: 4, 1: 2 }, weights: { similarity: 1, level: 0.2, recency: 0.1, diversity: 0.3 }, expand: { coversOnly: true, perGroupTopM: 3 }, rerank: { stage1: true, stage2: true, topnFinal: 12 }, compose: { maxHigh: 4, maxLow: 8 }, topkInitial: 32, topkDrill: 24 }
-    : intent === 'detail'
+    : (query.intent || 'auto') === 'detail'
       ? { levelQuotas: { 1: 8, 2: 3, 3: 1 }, weights: { similarity: 1, level: -0.1, recency: 0.2, diversity: 0.2 }, expand: { coversOnly: true, perGroupTopM: 4 }, rerank: { stage1: true, stage2: true, topnFinal: 16 }, compose: { maxHigh: 3, maxLow: 10, maxRaw: 3 }, topkInitial: 40, topkDrill: 40 }
       : { levelQuotas: { 2: 4, 1: 8 }, weights: { similarity: 1, level: 0, recency: 0.4, diversity: 0.2 }, expand: { coversOnly: true, perGroupTopM: 3 }, rerank: { stage1: true, stage2: false, topnFinal: 12 }, compose: { maxHigh: 3, maxLow: 8 }, topkInitial: 32, topkDrill: 32 };
 
-  const embedder = useVertex ? new VertexEmbedder(process.env.GOOGLE_CLOUD_PROJECT || process.env.PROJECT_ID) : new StudioEmbedder(process.env.GEMINI_API_KEY);
+  // Merge policy overrides from plan if provided
+  let effectivePolicy: RagPolicy = policy;
+  if (planJson?.policy) {
+    const p = planJson.policy;
+    effectivePolicy = {
+      levelQuotas: p.levelQuotas || policy.levelQuotas,
+      weights: p.weights ? { ...policy.weights, ...p.weights } : policy.weights,
+      expand: p.expand ? { ...policy.expand, ...p.expand } : policy.expand,
+      rerank: p.rerank ? { ...policy.rerank, ...p.rerank } : policy.rerank,
+      compose: p.compose ? { ...policy.compose, ...p.compose } : policy.compose,
+      topkInitial: p.topkInitial != null ? p.topkInitial : policy.topkInitial,
+      topkDrill: p.topkDrill != null ? p.topkDrill : policy.topkDrill,
+    } as RagPolicy;
+  }
+
+  const embedder = (planJson?.useVertex != null ? !!planJson.useVertex : useVertex)
+    ? new VertexEmbedder(process.env.GOOGLE_CLOUD_PROJECT || process.env.PROJECT_ID)
+    : new StudioEmbedder(process.env.GEMINI_API_KEY);
   const [vec] = await embedder.embed([query.text]);
 
   const index = new PgRagIndex();
   await index.connect();
   try {
-    const levels = Object.keys(policy.levelQuotas).map(n => Number(n)).sort((a,b)=>b-a);
+    const levels = Object.keys(effectivePolicy.levelQuotas).map(n => Number(n)).sort((a,b)=>b-a);
     const convId = slug ? await index.getConversationIdBySlug(slug) : null;
-    const initial = await index.search(levels, vec, { topk: policy.topkInitial, conversationId: convId ?? undefined });
+    const initial = await index.search(levels, vec, {
+      topk: effectivePolicy.topkInitial,
+      conversationId: convId ?? undefined,
+      tagsAny: query.hints?.tags,
+      entitiesAny: query.hints?.entities,
+      timeWindow: query.timeWindow ? { from: query.timeWindow.from?.toISOString(), to: query.timeWindow.to?.toISOString() } : undefined
+    });
 
-    // Stage A: score combination and diversity (light)
-    const scored = scoreAndDiversify(initial, policy);
+    // Stage A: preserve raw sim and score + diversity
+    const withSim = (initial as any[]).map(c => ({ ...c, sim: c.score || 0 }));
+    let scored = scoreAndDiversify(withSim as any, effectivePolicy);
+
+    // Budget-aware acceptance + exploration (if planner provided)
+    const budget = (planJson?.budget?.tokens || query.budget?.tokens || 'medium') as ('small'|'medium'|'large');
+    const scarcity = budget === 'small' ? 1 : budget === 'medium' ? 0.5 : 0;
+    if (planJson?.acceptance?.minSimBase != null) {
+      const minSimBase = planJson.acceptance.minSimBase;
+      const scarcityBoost = planJson.acceptance.scarcityBoost ?? 0.08;
+      const minSim = Math.max(0, Math.min(1, minSimBase - scarcityBoost * scarcity));
+      const explorationSlots = Math.max(0, Math.floor(planJson.acceptance.explorationSlots ?? (budget === 'small' ? 2 : 1)));
+      const passed = (scored as any[]).filter(c => (c.sim ?? 0) >= minSim);
+      const rejected = (scored as any[]).filter(c => (c.sim ?? 0) < minSim);
+      const exploratory = rejected.slice(0, explorationSlots);
+      scored = [...passed, ...exploratory] as any;
+    }
 
     // Stage B: drill-down covers-only from high-level winners
-    const topHigh = pickHighLevel(scored, policy);
+    const topHigh = pickHighLevel(scored, effectivePolicy);
     const covers = unionCovers(topHigh);
     let expanded: Candidate[] = [];
-    if (policy.expand.coversOnly && covers.length) {
-      const low = await index.search([1], vec, { topk: policy.topkDrill, scopeCovers: covers, conversationId: convId ?? undefined });
+    // Decompression triggers: planner can override default coversOnly
+    const meanHighSim = topHigh.length ? (topHigh as any[]).reduce((a, x) => a + (x.sim ?? 0), 0) / topHigh.length : 0;
+    const shouldDrill = (
+      (planJson?.decompression?.enableLkToL1 ?? effectivePolicy.expand.coversOnly) &&
+      covers.length &&
+      (meanHighSim < (planJson?.decompression?.triggers?.meanSimLt ?? 1.0))
+    );
+    if (shouldDrill) {
+      const low = await index.search([1], vec, {
+        topk: effectivePolicy.topkDrill,
+        scopeCovers: covers,
+        conversationId: convId ?? undefined,
+        tagsAny: query.hints?.tags,
+        entitiesAny: query.hints?.entities,
+        timeWindow: query.timeWindow ? { from: query.timeWindow.from?.toISOString(), to: query.timeWindow.to?.toISOString() } : undefined
+      });
       expanded = mergeUnique(scored, low);
     } else {
       expanded = scored;
@@ -51,21 +147,52 @@ async function main() {
 
     // Stage C: reranking stage1/2
     let reranked = expanded;
-    if (policy.rerank.stage1) reranked = simpleStage1Rerank(reranked, policy);
-    if (policy.rerank.stage2) reranked = await stage2RerankMMR(reranked, policy, embedder, query.text);
+    if (effectivePolicy.rerank.stage1) reranked = simpleStage1Rerank(reranked, effectivePolicy);
+    if (effectivePolicy.rerank.stage2) reranked = await stage2RerankMMR(reranked, effectivePolicy, embedder, query.text);
 
     // Stage D: compose context
-    const bundle = composeContext(reranked, policy);
+    const bundle = composeContext(reranked, effectivePolicy);
+    // Optional quotes from L1 covers
+    let quotes: Array<{ level: number; index: number|null; excerpt: string; sim?: number }> = [];
+    if (planJson?.expandPolicy?.enableCovers) {
+      const perHigh = Math.max(0, Math.floor(planJson.expandPolicy.quotesPerHigh ?? 2));
+      const maxChars = Math.max(80, Math.floor(planJson.expandPolicy.quoteMaxChars ?? 300));
+      const lowL1 = bundle.low.filter(x => x.level === 1);
+      for (const h of bundle.high as any[]) {
+        const picks = lowL1.filter(l => (h.covers || []).includes(l.index as any)).slice(0, perHigh);
+        for (const p of picks as any[]) quotes.push({ level: p.level, index: p.index ?? null, excerpt: (p.content||'').slice(0, maxChars), sim: p.sim });
+      }
+    }
     const output = {
       ts: new Date().toISOString(),
-      plan: { slug, intent, levels, policy },
+      plan: { slug, intent, levels, policy: effectivePolicy, planner: planJson || null },
       picks: {
         high: bundle.high.map(p => ({ id: p.id, level: p.level, index: p.index, score: p.score, charCount: p.charCount, covers: p.covers || [], content: p.content })),
         low: bundle.low.map(p => ({ id: p.id, level: p.level, index: p.index, score: p.score, charCount: p.charCount, covers: p.covers || [], content: p.content }))
       },
+      quotes,
       coversUnion: covers
     };
-    if (exportFlag) {
+    if (composePrompt || exportPromptFlag || (exportPromptArg && exportPromptArg !== 'true' && exportPromptArg !== '1')) {
+      const prompt = composeFinalPrompt(output, query);
+      // Save prompt if requested
+      if (exportPromptFlag || (exportPromptArg && exportPromptArg !== 'true' && exportPromptArg !== '1')) {
+        const baseDir = path.resolve(process.cwd(), 'artefacts/HMM/composed_prompt', slug || 'default');
+        await fs.mkdir(baseDir, { recursive: true });
+        const outPath = exportPromptArg && exportPromptArg !== 'true' && exportPromptArg !== '1'
+          ? path.resolve(process.cwd(), exportPromptArg)
+          : path.join(baseDir, `prompt_${Date.now()}.txt`);
+        await fs.writeFile(outPath, prompt, 'utf8');
+        // write latest
+        const latestPath = path.join(baseDir, 'latest.txt');
+        try { await fs.writeFile(latestPath, prompt, 'utf8'); } catch {}
+        console.log(`Exported composed prompt → ${outPath}`);
+      }
+      // Print prompt to stdout when --compose-prompt provided
+      if (composePrompt) {
+        console.log(prompt);
+      }
+    } else if (exportFlag) {
       const baseDir = path.resolve(process.cwd(), 'artefacts/HMM/rag_context', slug || 'default');
       await fs.mkdir(baseDir, { recursive: true });
       const outPath = exportArg && exportArg !== 'true' && exportArg !== '1'
@@ -96,9 +223,17 @@ function scoreAndDiversify(cands: Candidate[], policy: RagPolicy): Candidate[] {
 }
 
 function combineScore(c: Candidate, policy: RagPolicy, nowMs: number): number {
-  const sim = Math.max(0, Math.min(1, c.score ?? 0));
+  const sim = Math.max(0, Math.min(1, (c as any).sim ?? (c as any).score ?? 0));
   const levelPrior = c.level >= 2 ? 1 : 0; // simple prior: high-level gets +weight when relevant
-  const recency = 0; // placeholder without timestamps
+  // recency scoring (half-life ~30 days)
+  let recency = 0;
+  if (c.recencyTs) {
+    const ts = new Date(c.recencyTs).getTime();
+    const days = Math.max(0, (nowMs - ts) / (1000*60*60*24));
+    const halflife = 30;
+    const decay = Math.pow(0.5, days / halflife);
+    recency = decay; // in [0,1]
+  }
   return policy.weights.similarity * sim + policy.weights.level * levelPrior + policy.weights.recency * recency;
 }
 
@@ -185,4 +320,28 @@ function composeContext(cands: Candidate[], policy: RagPolicy): { high: Candidat
   const high = cands.filter(c => c.level >= 2).slice(0, policy.compose.maxHigh);
   const low = cands.filter(c => c.level === 1).slice(0, policy.compose.maxLow);
   return { high, low };
+}
+
+// ===== Prompt composer (simple) =====
+function composeFinalPrompt(output: any, query: IRagQuery): string {
+  const parts: string[] = [];
+  parts.push(`# Contexte Hiérarchique`);
+  parts.push(`## High-level (Lk)`);
+  for (const h of output.picks.high || []) {
+    parts.push(`- [L${h.level} #${h.index ?? '?'} | score=${(h.score||0).toFixed(3)}]`);
+    parts.push(limitText(h.content, 800));
+  }
+  parts.push(`\n## Détails (L1)`);
+  for (const l of output.picks.low || []) {
+    parts.push(`- [L1 #${l.index ?? '?'} | score=${(l.score||0).toFixed(3)}]`);
+    parts.push(limitText(l.content, 800));
+  }
+  parts.push(`\n## Question`);
+  parts.push(query.text || '');
+  return parts.join('\n');
+}
+
+function limitText(s: string, max: number): string {
+  if (!s) return '';
+  return s.length > max ? (s.slice(0, max) + '…') : s;
 }

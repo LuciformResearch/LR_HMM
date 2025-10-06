@@ -1,0 +1,17 @@
+{
+  "useVertex": true,
+  "query": {
+    "text": "résumer l'orage et klymaion",
+    "intent": "synthesis",
+    "hints": { "tags": ["orage","rituel"], "entities": ["Lucie","Klymäiôn"] }
+  },
+  "policy": {
+    "levelQuotas": { "3": 4, "2": 5, "1": 3 },
+    "weights": { "similarity": 1.0, "level": 0.25, "recency": 0.15, "diversity": 0.35 },
+    "expand": { "coversOnly": true, "perGroupTopM": 3 },
+    "rerank": { "stage1": true, "stage2": true, "topnFinal": 12 },
+    "compose": { "maxHigh": 4, "maxLow": 8 },
+    "topkInitial": 36,
+    "topkDrill": 28
+  }
+}

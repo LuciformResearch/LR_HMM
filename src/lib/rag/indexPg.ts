@@ -17,7 +17,11 @@ export class PgRagIndex implements IRagIndex {
   async connect() { await this.client.connect(); }
   async close() { await this.client.end(); }
 
-  async search(levels: number[], queryEmbedding: number[], opts: { topk: number; scopeCovers?: number[]; conversationId?: number }): Promise<Candidate[]> {
+  async search(
+    levels: number[],
+    queryEmbedding: number[],
+    opts: { topk: number; scopeCovers?: number[]; conversationId?: number; tagsAny?: string[]; entitiesAny?: string[]; timeWindow?: { from?: string; to?: string } }
+  ): Promise<Candidate[]> {
     // Minimal baseline: cosine distance over summaries embeddings; optional scope by covers via where clause after joining summaries
     const qp = '[' + queryEmbedding.map(v => (Number.isFinite(v) ? v : 0).toFixed(6)).join(',') + ']';
     const topk = Math.max(1, Math.floor(opts.topk || 8));
@@ -38,8 +42,34 @@ export class PgRagIndex implements IRagIndex {
     if (opts.conversationId != null) {
       where += ` AND s.conversation_id = $${params.push(opts.conversationId)}`;
     }
+
+    // Optional filters: tagsAny intersects topics
+    if (opts.tagsAny && opts.tagsAny.length) {
+      where += ` AND (s.topics && $${params.push(opts.tagsAny)}::text[])`;
+    }
+    // Optional filters: entitiesAny intersects any entities array in meta.entities
+    if (opts.entitiesAny && opts.entitiesAny.length) {
+      const arrParam = params.push(opts.entitiesAny);
+      // check across known entity buckets
+      const entityConds = [
+        `EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(s.meta->'entities'->'persons','[]'::jsonb)) v WHERE v = ANY($${arrParam}))`,
+        `EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(s.meta->'entities'->'orgs','[]'::jsonb)) v WHERE v = ANY($${arrParam}))`,
+        `EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(s.meta->'entities'->'artifacts','[]'::jsonb)) v WHERE v = ANY($${arrParam}))`,
+        `EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(s.meta->'entities'->'places','[]'::jsonb)) v WHERE v = ANY($${arrParam}))`,
+        `EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(s.meta->'entities'->'times','[]'::jsonb)) v WHERE v = ANY($${arrParam}))`,
+        `EXISTS (SELECT 1 FROM jsonb_array_elements_text(COALESCE(s.meta->'entities'->'others','[]'::jsonb)) v WHERE v = ANY($${arrParam}))`
+      ].join(' OR ');
+      where += ` AND (${entityConds})`;
+    }
+    // Optional time window on summaries.created_at
+    if (opts.timeWindow?.from) {
+      where += ` AND s.created_at >= $${params.push(opts.timeWindow.from)}`;
+    }
+    if (opts.timeWindow?.to) {
+      where += ` AND s.created_at <= $${params.push(opts.timeWindow.to)}`;
+    }
     const sql = `
-      SELECT s.id, s.conversation_id, s.level, s.idx AS index, s.char_count, s.content, s.covers,
+      SELECT s.id, s.conversation_id, s.level, s.idx AS index, s.char_count, s.content, s.covers, s.created_at,
              (e.vector <=> $1::vector) AS distance
       FROM embeddings e
       JOIN summaries s ON s.id = e.ref_id AND e.ref_type = 'summary'
@@ -50,7 +80,7 @@ export class PgRagIndex implements IRagIndex {
     const r = await this.client.query(sql, params);
     return r.rows.map(row => ({
       id: row.id, conversationId: row.conversation_id, level: row.level, index: row.index ?? null,
-      charCount: row.char_count ?? null, content: row.content, covers: row.covers || [], score: 1 - Number(row.distance || 0)
+      charCount: row.char_count ?? null, content: row.content, covers: row.covers || [], score: 1 - Number(row.distance || 0), recencyTs: row.created_at || null
     }));
   }
 

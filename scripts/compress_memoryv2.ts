@@ -129,12 +129,15 @@ async function main() {
   let l1Blocks: RawDataBlock[] = [];
   let lGroups: LSummary[][] = [];
   if (level === 1) {
-    const turns = items.map((it, i) => ({
-      role: it.role === 'assistant' || it.role === 'user' ? it.role : 'unknown',
-      content: it.content,
-      index: typeof it.index === 'number' ? it.index : i,
-      charCount: typeof it.charCount === 'number' ? it.charCount : it.content.length,
-    }));
+    // Ignore messages whose role is neither assistant nor user
+    const turns = items
+      .filter(it => it.role === 'assistant' || it.role === 'user')
+      .map((it, i) => ({
+        role: it.role as ('assistant'|'user'),
+        content: it.content,
+        index: typeof it.index === 'number' ? it.index : i,
+        charCount: typeof it.charCount === 'number' ? it.charCount : it.content.length,
+      }));
 
     const prepared = prepareBlocksChat(turns as any, {
       channel: 'chat',

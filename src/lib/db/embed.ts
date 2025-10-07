@@ -4,7 +4,7 @@ import fetch from 'node-fetch';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { GoogleAuth } from 'google-auth-library';
 
-export async function embedMissingSummaries(opts: { slug: string; whereLevels: number[]; limitPerLevel?: number; useVertex?: boolean; embedModel?: string; vertexModel?: string }) {
+export async function embedMissingSummaries(opts: { slug: string; whereLevels: number[]; limitPerLevel?: number; useVertex?: boolean; embedModel?: string; vertexModel?: string }): Promise<{ total: number; perLevel: Record<number, number> }> {
   const client = new Client({ host: process.env.PGHOST || 'localhost', port: Number(process.env.PGPORT || 6432), user: process.env.PGUSER || 'shadeos', password: process.env.PGPASSWORD || 'shadeos', database: process.env.PGDATABASE || 'shadeos_local' });
   await client.connect();
   try {
@@ -12,6 +12,7 @@ export async function embedMissingSummaries(opts: { slug: string; whereLevels: n
     if (r.rowCount === 0) return 0;
     const conversationId = r.rows[0].id as number;
     let total = 0;
+    const perLevel: Record<number, number> = {};
     for (const lvl of opts.whereLevels) {
       const lim = Math.max(0, opts.limitPerLevel || 100);
       const sql = `
@@ -23,7 +24,7 @@ export async function embedMissingSummaries(opts: { slug: string; whereLevels: n
         ${lim>0?`LIMIT ${lim}`:''}
       `;
       const rows = (await client.query(sql, [conversationId, lvl])).rows as Array<{ id:number; conversation_id:number; content:string }>;
-      if (!rows.length) continue;
+      if (!rows.length) { perLevel[lvl] = 0; continue; }
 
       // Provider init
       const useVertex = !!opts.useVertex;
@@ -36,6 +37,7 @@ export async function embedMissingSummaries(opts: { slug: string; whereLevels: n
       } else {
         const key = process.env.GEMINI_API_KEY; if (!key) throw new Error('GEMINI_API_KEY required for studio embedding'); studio = new GoogleGenerativeAI(key);
       }
+      let insertedLevel = 0;
       for (const row of rows) {
         const text = (row.content || '').slice(0, 8192);
         let values: number[] | undefined;
@@ -58,10 +60,10 @@ export async function embedMissingSummaries(opts: { slug: string; whereLevels: n
            VALUES ($1,'summary',$2,$3,$4,$5,$6::vector)`,
           [row.conversation_id, row.id, useVertex ? 'vertex' : 'studio', useVertex ? vertexModel : embedModel, dim, vec]
         );
-        total++;
+        total++; insertedLevel++;
       }
+      perLevel[lvl] = insertedLevel;
     }
-    return total;
+    return { total, perLevel };
   } finally { await client.end(); }
 }
-

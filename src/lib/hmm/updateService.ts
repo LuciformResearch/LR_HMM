@@ -114,7 +114,7 @@ export function groupForL2(blocks: LSummary[], groupChars: number): LSummary[][]
 }
 
 export async function fetchSummaries(client: Client, conversationId: number, level: 1|2|3): Promise<Array<{ index: number|null; summary: string; summaryChars: number; covers: number[] }>> {
-  const r = await client.query('SELECT idx AS index, content AS summary, char_count AS summaryChars, COALESCE(covers, \"[]\"::jsonb) AS covers, meta FROM summaries WHERE conversation_id=$1 AND level=$2 ORDER BY COALESCE(idx,0), id', [conversationId, level]);
+  const r = await client.query("SELECT idx AS index, content AS summary, char_count AS summaryChars, COALESCE(covers, '[]'::jsonb) AS covers, meta FROM summaries WHERE conversation_id=$1 AND level=$2 ORDER BY COALESCE(idx,0), id", [conversationId, level]);
   return r.rows.map((row: any) => ({ index: row.index, summary: row.summary || '', summaryChars: row.summarychars || (row.summary||'').length, covers: Array.isArray(row.covers) ? row.covers : [] }));
 }
 

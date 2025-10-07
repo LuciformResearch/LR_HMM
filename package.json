@@ -14,7 +14,8 @@
     "parse:gpt": "tsx scripts/parse_gpt_export.ts",
     "mcp:start": "tsx src/mcp/server.ts",
     "persona:shadeos": "tsx scripts/compose_persona_shadeos.ts --out-dir personas --out ShadeOS_dynamic.generated.luciform",
-    "simulate:incremental": "tsx scripts/simulate_incremental_chat.ts --in artefacts/HMM/parsed/2025-06-25__orage_codé_textuel.json --vertexai true"
+    "simulate:incremental": "tsx scripts/simulate_incremental_chat.ts --in artefacts/HMM/parsed/2025-06-25__orage_codé_textuel.json --vertexai true",
+    "bench:ollama": "tsx scripts/benchmark_ollama.ts --model gemma2:2b --rounds 3 --timeout-ms 20000"
   },
   "dependencies": {
     "@google/genai": "^0.3.1",

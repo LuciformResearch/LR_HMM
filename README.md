@@ -153,4 +153,4 @@ Le plan permet d’ajuster: `policy.weights/quotas`, `topk*`, `acceptance.minSim
 - RAG: filtres (`--tags/--entities/--from/--to`), `--export-prompt` (avec `latest.txt`), `--plan` (budget‑aware, triggers drill, quotes L1 optionnelles).
 
 ## Licence
-Variante MIT avec attribution renforcée (voir `LICENSE`).
+Apache 2.0 (voir `LICENSE`).

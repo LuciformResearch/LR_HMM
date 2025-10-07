@@ -12,6 +12,7 @@ GoogleJSONKeys/
 # Logs and artefacts
 artefacts/logs/
 *.log
+data/pgdata/
 
 # OS/editor
 .DS_Store
